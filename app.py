@@ -48,12 +48,6 @@ def classify_activity(value):
 
 
 def extract_origin_phone(subject):
-    """
-    Extrae el telefono origen completo desde 'Actividad - Asunto'.
-    Ejemplo:
-    'LLamada saliente (00:00:12) de +34604574139 (Ventas) a +34696481998 (Benito)'
-    -> '+34604574139'
-    """
     if pd.isna(subject):
         return None
 
@@ -170,7 +164,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
         if not call_2.empty:
             result["call_2_at"] = call_2.iloc[0]["activity_completed_at"]
             result["has_call_2"] = True
-
             base_time = result["wpp_1_at"] if result["has_wpp_1"] else result["call_1_at"]
             result["call_2_delay_h"] = round(
                 hours_between(base_time, result["call_2_at"]), 2
@@ -199,7 +192,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
         if not call_4.empty:
             result["call_4_at"] = call_4.iloc[0]["activity_completed_at"]
             result["has_call_4"] = True
-
             base_time = result["wpp_2_at"] if result["has_wpp_2"] else result["call_3_at"]
             result["call_4_delay_h"] = round(
                 hours_between(base_time, result["call_4_at"]), 2
@@ -454,9 +446,6 @@ def card(title, value, subtitle=""):
 
 st.title("📞 Analisis de leads y llamadas")
 
-# -------------------------
-# SIDEBAR PRINCIPAL
-# -------------------------
 with st.sidebar:
     page = st.radio(
         "Selecciona analisis",
@@ -529,28 +518,13 @@ if page == "Resumen / resultados":
     milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
     carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
 
-    carrousel_status_options_resumen = [
-        "Todos",
-        "Uso ideal",
-        "Uso parcial",
-        "Incorrecto",
-        "Sin llamadas",
-    ]
-
     with st.sidebar:
         st.header("Filtros resumen")
         selected_carrousel_status_resumen = st.selectbox(
             "Estado carrusel para el grafico",
-            carrousel_status_options_resumen,
-            key="selected_carrousel_status_resumen"
+            ["Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
+            key="selected_carrousel_status_resumen",
         )
-
-    carrousel_df_chart = carrousel_df.copy()
-
-    if selected_carrousel_status_resumen != "Todos":
-        carrousel_df_chart = carrousel_df_chart[
-            carrousel_df_chart["carrousel_status"] == selected_carrousel_status_resumen
-        ].copy()
 
     if milestones.empty:
         st.warning("No hay datos para los filtros seleccionados.")
@@ -587,9 +561,9 @@ if page == "Resumen / resultados":
         .reset_index()
     )
 
-    if not carrousel_df_chart.empty:
+    if not carrousel_df.empty:
         carrousel_agent_summary = (
-            carrousel_df_chart.groupby("agent")
+            carrousel_df.groupby("agent")
             .agg(
                 leads_carrousel=("lead_id", "nunique"),
                 uso_ideal_carrusel=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
@@ -609,16 +583,7 @@ if page == "Resumen / resultados":
             "sin_llamadas_carrusel",
         ])
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Leads analizados", len(milestones))
-    k2.metric("Agentes", milestones["agent"].nunique())
-    k3.metric(
-        "Uso medio del flujo",
-        f"{flow_agent_summary['uso_flujo_pct'].mean():.1f}%" if not flow_agent_summary.empty else "0.0%"
-    )
-
     metric_col_map = {
-        "Todos": "uso_ideal_carrusel",
         "Uso ideal": "uso_ideal_carrusel",
         "Uso parcial": "uso_parcial_carrusel",
         "Incorrecto": "incorrecto_carrusel",
@@ -626,9 +591,17 @@ if page == "Resumen / resultados":
     }
     selected_metric_col = metric_col_map[selected_carrousel_status_resumen]
 
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Leads analizados", len(milestones))
+    k2.metric("Agentes", milestones["agent"].nunique())
+    k3.metric(
+        "Uso medio del flujo",
+        f"{flow_agent_summary['uso_flujo_pct'].mean():.1f}%" if not flow_agent_summary.empty else "0.0%"
+    )
     k4.metric(
         f"Carrusel · {selected_carrousel_status_resumen}",
-        f"{carrousel_agent_summary[selected_metric_col].mean():.1f}%" if not carrousel_agent_summary.empty else "0.0%"
+        f"{carrousel_agent_summary[selected_metric_col].mean():.1f}%"
+        if not carrousel_agent_summary.empty else "0.0%"
     )
 
     st.subheader("Grafico 1 · Agente por agente · Quien usa el flujo")
@@ -640,7 +613,7 @@ if page == "Resumen / resultados":
     st.bar_chart(chart_flow_use)
 
     st.subheader(
-        f"Grafico 2 · Agente por agente · Carrusel filtrado por: {selected_carrousel_status_resumen}"
+        f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: {selected_carrousel_status_resumen}"
     )
     if not carrousel_agent_summary.empty:
         chart_carrousel = (
@@ -683,14 +656,6 @@ if page == "Uso de carrusel telefonico":
 
     agents_carrousel = sorted(carrousel_df["agent"].dropna().unique().tolist())
 
-    carrousel_status_options = [
-        "Todos",
-        "Uso ideal",
-        "Uso parcial",
-        "Incorrecto",
-        "Sin llamadas",
-    ]
-
     with st.sidebar:
         st.header("Filtros carrusel")
         selected_agent_carrousel = st.selectbox(
@@ -700,7 +665,7 @@ if page == "Uso de carrusel telefonico":
         )
         selected_carrousel_status = st.selectbox(
             "Estado del carrusel",
-            carrousel_status_options,
+            ["Todos", "Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
             key="selected_carrousel_status"
         )
 
