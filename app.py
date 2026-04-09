@@ -20,6 +20,21 @@ WHATSAPP_TYPES = {
 CALL_START_HOUR = 9
 CALL_END_HOUR = 18
 
+MONTHS_ES = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
+
 
 def classify_activity(value):
     if pd.isna(value):
@@ -108,6 +123,9 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
         "lead_created_at": group["lead_created_at"].iloc[0],
         "normalized_created_at": group["normalized_created_at"].iloc[0],
         "was_normalized": bool(group["was_normalized"].iloc[0]),
+        "lead_year": group["lead_year"].iloc[0],
+        "lead_month": group["lead_month"].iloc[0],
+        "lead_month_name": group["lead_month_name"].iloc[0],
         "call_1_at": pd.NaT,
         "wpp_1_at": pd.NaT,
         "call_2_at": pd.NaT,
@@ -219,6 +237,9 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
         "lead_id": group["lead_id"].iloc[0],
         "agent": group["agent"].iloc[0],
         "lead_created_at": group["lead_created_at"].iloc[0],
+        "lead_year": group["lead_year"].iloc[0],
+        "lead_month": group["lead_month"].iloc[0],
+        "lead_month_name": group["lead_month_name"].iloc[0],
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
@@ -237,7 +258,6 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     result["unique_origin_phones"] = unique_phones
     result["phones_sequence"] = " | ".join(phones)
 
-    # Maximo esperable: 3 lineas distintas
     expected_unique = min(num_calls, 3)
     result["expected_unique_phones"] = expected_unique
 
@@ -260,6 +280,35 @@ def resolve_completed_column(columns):
     if "Actividad - Hora en que se marco como completada" in columns:
         return "Actividad - Hora en que se marco como completada"
     return None
+
+
+def compute_flow_usage_score(df: pd.DataFrame) -> pd.Series:
+    """
+    % de pasos del flujo completados sobre 7 pasos posibles.
+    """
+    step_cols = [
+        "has_call_1",
+        "has_wpp_1",
+        "has_call_2",
+        "has_call_3",
+        "has_wpp_2",
+        "has_call_4",
+        "has_wpp_3",
+    ]
+    return df[step_cols].sum(axis=1) / len(step_cols) * 100
+
+
+def apply_general_filters(df: pd.DataFrame, selected_year, selected_month, month_name_to_num):
+    out = df.copy()
+
+    if selected_year != "Todos":
+        out = out[out["lead_year"] == selected_year].copy()
+
+    if selected_month != "Todos":
+        month_num = month_name_to_num[selected_month]
+        out = out[out["lead_month"] == month_num].copy()
+
+    return out
 
 
 @st.cache_data
@@ -313,6 +362,10 @@ def load_data(uploaded_file):
     )
     df["was_normalized"] = df["normalized_created_at"] != df["lead_created_at"]
 
+    df["lead_year"] = df["lead_created_at"].dt.year
+    df["lead_month"] = df["lead_created_at"].dt.month
+    df["lead_month_name"] = df["lead_month"].map(MONTHS_ES)
+
     df = df.sort_values(["lead_id", "activity_completed_at"]).reset_index(drop=True)
     return df
 
@@ -330,6 +383,9 @@ def build_milestones(df: pd.DataFrame) -> pd.DataFrame:
         "lead_created_at": pd.NaT,
         "normalized_created_at": pd.NaT,
         "was_normalized": False,
+        "lead_year": None,
+        "lead_month": None,
+        "lead_month_name": None,
         "call_1_at": pd.NaT,
         "wpp_1_at": pd.NaT,
         "call_2_at": pd.NaT,
@@ -372,6 +428,9 @@ def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
         "lead_id": None,
         "agent": None,
         "lead_created_at": pd.NaT,
+        "lead_year": None,
+        "lead_month": None,
+        "lead_month_name": None,
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
@@ -406,31 +465,15 @@ def card(title, value, subtitle=""):
         unsafe_allow_html=True,
     )
 
-def compute_flow_usage_score(df: pd.DataFrame) -> pd.Series:
-    """
-    Calcula un score simple de uso del flujo por lead:
-    % de pasos del flujo completados sobre 7 pasos posibles.
-    """
-    step_cols = [
-        "has_call_1",
-        "has_wpp_1",
-        "has_call_2",
-        "has_call_3",
-        "has_wpp_2",
-        "has_call_4",
-        "has_wpp_3",
-    ]
-    return df[step_cols].sum(axis=1) / len(step_cols) * 100
-    
+
 st.title("📞 Analisis de leads y llamadas")
 
 with st.sidebar:
     page = st.radio(
         "Selecciona analisis",
-        ["Flujo de tratamiento", "Uso de carrusel telefonico"]
+        ["Resumen / resultados", "Flujo de tratamiento", "Uso de carrusel telefonico"]
     )
 
-    # valores por defecto
     max_call_1_min = 5
     max_wpp_1_min = 5
     max_call_2_h = 4.0
@@ -439,7 +482,7 @@ with st.sidebar:
     max_call_4_h = 36.0
     max_wpp_3_min = 5
 
-    if page == "Flujo de tratamiento":
+    if page in ["Resumen / resultados", "Flujo de tratamiento"]:
         st.header("Filtros de tiempo")
         max_call_1_min = st.number_input("Limite Llamada 1 (min)", min_value=1, max_value=1440, value=5)
         max_wpp_1_min = st.number_input("Limite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5)
@@ -461,13 +504,139 @@ except Exception as exc:
     st.error(str(exc))
     st.stop()
 
+month_name_to_num = {v: k for k, v in MONTHS_ES.items()}
+
+available_years = sorted([int(y) for y in df["lead_year"].dropna().unique().tolist()])
+available_months_num = sorted([int(m) for m in df["lead_month"].dropna().unique().tolist()])
+available_months = [MONTHS_ES[m] for m in available_months_num]
+
+with st.sidebar:
+    st.header("Filtros generales")
+    selected_year = st.selectbox("Año", ["Todos"] + available_years)
+    selected_month = st.selectbox("Mes", ["Todos"] + available_months)
+
+# =========================
+# PAGINA RESUMEN / RESULTADOS
+# =========================
+if page == "Resumen / resultados":
+    milestones = build_milestones(df)
+    carrousel_df = build_carrousel_analysis(df)
+
+    milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
+    carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
+
+    if milestones.empty:
+        st.warning("No hay datos para los filtros seleccionados.")
+        st.stop()
+
+    milestones["flow_usage_pct"] = compute_flow_usage_score(milestones)
+
+    milestones["call_1_within_limit"] = milestones["has_call_1"] & (milestones["call_1_delay_min"] <= max_call_1_min)
+    milestones["wpp_1_within_limit"] = milestones["has_wpp_1"] & (milestones["wpp_1_delay_min"] <= max_wpp_1_min)
+    milestones["call_2_within_limit"] = milestones["has_call_2"] & (milestones["call_2_delay_h"] <= max_call_2_h)
+    milestones["call_3_within_limit"] = milestones["has_call_3"] & (milestones["call_3_delay_h"] <= max_call_3_h)
+    milestones["wpp_2_within_limit"] = milestones["has_wpp_2"] & (milestones["wpp_2_delay_min"] <= max_wpp_2_min)
+    milestones["call_4_within_limit"] = milestones["has_call_4"] & (milestones["call_4_delay_h"] <= max_call_4_h)
+    milestones["wpp_3_within_limit"] = milestones["has_wpp_3"] & (milestones["wpp_3_delay_min"] <= max_wpp_3_min)
+
+    limit_cols = [
+        "call_1_within_limit",
+        "wpp_1_within_limit",
+        "call_2_within_limit",
+        "call_3_within_limit",
+        "wpp_2_within_limit",
+        "call_4_within_limit",
+        "wpp_3_within_limit",
+    ]
+    milestones["flow_quality_pct"] = milestones[limit_cols].sum(axis=1) / len(limit_cols) * 100
+
+    flow_agent_summary = (
+        milestones.groupby("agent")
+        .agg(
+            leads=("lead_id", "nunique"),
+            uso_flujo_pct=("flow_usage_pct", "mean"),
+            calidad_flujo_pct=("flow_quality_pct", "mean"),
+            llamada_1=("has_call_1", lambda s: round(s.mean() * 100, 1)),
+            llamada_2=("has_call_2", lambda s: round(s.mean() * 100, 1)),
+            llamada_3=("has_call_3", lambda s: round(s.mean() * 100, 1)),
+            llamada_4=("has_call_4", lambda s: round(s.mean() * 100, 1)),
+            whatsapp_1=("has_wpp_1", lambda s: round(s.mean() * 100, 1)),
+            whatsapp_2=("has_wpp_2", lambda s: round(s.mean() * 100, 1)),
+            whatsapp_3=("has_wpp_3", lambda s: round(s.mean() * 100, 1)),
+        )
+        .reset_index()
+    )
+
+    if not carrousel_df.empty:
+        carrousel_agent_summary = (
+            carrousel_df.groupby("agent")
+            .agg(
+                leads_carrousel=("lead_id", "nunique"),
+                uso_ideal_carrusel=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
+                uso_parcial_carrusel=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
+                incorrecto_carrusel=("carrousel_status", lambda s: round((s == "Incorrecto").mean() * 100, 1)),
+                sin_llamadas_carrusel=("carrousel_status", lambda s: round((s == "Sin llamadas").mean() * 100, 1)),
+            )
+            .reset_index()
+        )
+    else:
+        carrousel_agent_summary = pd.DataFrame(columns=[
+            "agent",
+            "leads_carrousel",
+            "uso_ideal_carrusel",
+            "uso_parcial_carrusel",
+            "incorrecto_carrusel",
+            "sin_llamadas_carrusel",
+        ])
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Leads analizados", len(milestones))
+    k2.metric("Agentes", milestones["agent"].nunique())
+    k3.metric(
+        "Uso medio del flujo",
+        f"{flow_agent_summary['uso_flujo_pct'].mean():.1f}%" if not flow_agent_summary.empty else "0.0%"
+    )
+    k4.metric(
+        "Uso ideal carrusel",
+        f"{carrousel_agent_summary['uso_ideal_carrusel'].mean():.1f}%" if not carrousel_agent_summary.empty else "0.0%"
+    )
+
+    st.subheader("Grafico 1 · Agente por agente · Quien usa el flujo")
+    chart_flow_use = (
+        flow_agent_summary[["agent", "uso_flujo_pct"]]
+        .sort_values("uso_flujo_pct", ascending=False)
+        .set_index("agent")
+    )
+    st.bar_chart(chart_flow_use)
+
+    st.subheader("Grafico 2 · Agente por agente · Quien hace buen uso de carruseles")
+    if not carrousel_agent_summary.empty:
+        chart_carrousel_good = (
+            carrousel_agent_summary[["agent", "uso_ideal_carrusel"]]
+            .sort_values("uso_ideal_carrusel", ascending=False)
+            .set_index("agent")
+        )
+        st.bar_chart(chart_carrousel_good)
+    else:
+        st.info("No hay datos de carrusel para los filtros seleccionados.")
+
+    st.subheader("Tabla resumen por agente")
+    final_summary = flow_agent_summary.merge(
+        carrousel_agent_summary,
+        on="agent",
+        how="left"
+    )
+    st.dataframe(final_summary, use_container_width=True, hide_index=True)
+
+    st.stop()
+
 # =========================
 # PAGINA CARRUSEL
 # =========================
 if page == "Uso de carrusel telefonico":
     carrousel_df = build_carrousel_analysis(df)
+    carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
 
-    # blindaje extra
     for col, default_value in {
         "lead_id": None,
         "agent": None,
@@ -528,6 +697,8 @@ if page == "Uso de carrusel telefonico":
     detail_cols_carrousel = [
         "lead_id",
         "agent",
+        "lead_year",
+        "lead_month_name",
         "num_calls_with_phone",
         "unique_origin_phones",
         "expected_unique_phones",
@@ -541,6 +712,7 @@ if page == "Uso de carrusel telefonico":
 # PAGINA FLUJO
 # =========================
 milestones = build_milestones(df)
+milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
 
 agents = sorted(milestones["agent"].dropna().unique().tolist())
 selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
@@ -689,8 +861,11 @@ step_map = {
 
 exists_col, delay_col, limit_value = step_map[selected_step]
 step_detail = view[view[exists_col] == True].copy()
+
 if not step_detail.empty:
     step_detail["within_limit"] = step_detail[delay_col] <= limit_value
+else:
+    step_detail["within_limit"] = pd.Series(dtype=bool)
 
 st.subheader(f"Detalle temporal · {selected_step}")
 st.write(f"Mostrando solo leads que si llegaron a {selected_step.lower()}.")
@@ -698,6 +873,8 @@ st.write(f"Mostrando solo leads que si llegaron a {selected_step.lower()}.")
 detail_cols = [
     "lead_id",
     "agent",
+    "lead_year",
+    "lead_month_name",
     "lead_created_at",
     "normalized_created_at",
     "was_normalized",
