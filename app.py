@@ -95,15 +95,22 @@ def get_next(df, start_time, activity_group):
     return x.iloc[0]
 
 
-def evaluate_lead_sequence_only(group):
+def evaluate_lead_with_time(
+    group,
+    max_call_1_min,
+    max_wpp_1_min,
+    max_call_2_hours,
+    max_call_3_hours,
+    max_wpp_2_min,
+    max_call_4_hours,
+    max_wpp_3_min,
+):
     group = group.sort_values("activity_completed_at").copy()
+    created_at = group["normalized_created_at"].iloc[0]
 
     result = {
         "lead_id": group["lead_id"].iloc[0],
         "agent": group["agent"].iloc[0],
-        "lead_created_at": group["lead_created_at"].iloc[0],
-        "normalized_created_at": group["normalized_created_at"].iloc[0],
-        "was_normalized": bool(group["was_normalized"].iloc[0]),
         "call_1_ok": False,
         "whatsapp_1_ok": False,
         "call_2_ok": False,
@@ -115,49 +122,99 @@ def evaluate_lead_sequence_only(group):
         "fail_step": "",
     }
 
-    activities = group["activity_group"].tolist()
-    expected = ["call", "whatsapp", "call", "call", "whatsapp", "call", "whatsapp"]
-    keys = [
-        "call_1_ok",
-        "whatsapp_1_ok",
-        "call_2_ok",
-        "call_3_ok",
-        "whatsapp_2_ok",
-        "call_4_ok",
-        "whatsapp_3_ok",
-    ]
+    # 1️⃣ CALL 1
+    call_1 = get_next(group, created_at, "call")
+    if call_1 is None:
+        result["fail_step"] = "Sin llamada 1"
+        return result
 
-    idx = 0
-    for activity in activities:
-        if idx >= len(expected):
-            break
-        if activity == expected[idx]:
-            result[keys[idx]] = True
-            idx += 1
-
-    result["full_flow_ok"] = all(result[k] for k in keys)
-
-    if result["full_flow_ok"]:
-        result["fail_step"] = "Cumple todo"
+    delay = minutes_between(created_at, call_1["activity_completed_at"])
+    if delay <= max_call_1_min:
+        result["call_1_ok"] = True
     else:
-        for k, label in zip(
-            keys,
-            [
-                "Sin llamada 1",
-                "Sin WhatsApp 1",
-                "Sin llamada 2",
-                "Sin llamada 3",
-                "Sin WhatsApp 2",
-                "Sin llamada 4",
-                "Sin WhatsApp 3",
-            ],
-        ):
-            if not result[k]:
-                result["fail_step"] = label
-                break
+        result["fail_step"] = "Call 1 fuera de tiempo"
+        return result
 
+    # 2️⃣ WPP 1
+    w1 = get_next(group, call_1["activity_completed_at"], "whatsapp")
+    if w1 is None:
+        result["fail_step"] = "Sin WhatsApp 1"
+        return result
+
+    delay = minutes_between(call_1["activity_completed_at"], w1["activity_completed_at"])
+    if delay <= max_wpp_1_min:
+        result["whatsapp_1_ok"] = True
+    else:
+        result["fail_step"] = "WhatsApp 1 fuera de tiempo"
+        return result
+
+    # 3️⃣ CALL 2 (mín 90 min)
+    c2 = get_next(group, w1["activity_completed_at"], "call")
+    if c2 is None:
+        result["fail_step"] = "Sin llamada 2"
+        return result
+
+    delay_h = hours_between(w1["activity_completed_at"], c2["activity_completed_at"])
+    if delay_h >= 1.5 and delay_h <= max_call_2_hours:
+        result["call_2_ok"] = True
+    else:
+        result["fail_step"] = "Call 2 fuera de tiempo"
+        return result
+
+    # 4️⃣ CALL 3 (mín 12h)
+    c3 = get_next(group, c2["activity_completed_at"], "call")
+    if c3 is None:
+        result["fail_step"] = "Sin llamada 3"
+        return result
+
+    delay_h = hours_between(c2["activity_completed_at"], c3["activity_completed_at"])
+    if delay_h >= 12 and delay_h <= max_call_3_hours:
+        result["call_3_ok"] = True
+    else:
+        result["fail_step"] = "Call 3 fuera de tiempo"
+        return result
+
+    # 5️⃣ WPP 2
+    w2 = get_next(group, c3["activity_completed_at"], "whatsapp")
+    if w2 is None:
+        result["fail_step"] = "Sin WhatsApp 2"
+        return result
+
+    delay = minutes_between(c3["activity_completed_at"], w2["activity_completed_at"])
+    if delay <= max_wpp_2_min:
+        result["whatsapp_2_ok"] = True
+    else:
+        result["fail_step"] = "WhatsApp 2 fuera de tiempo"
+        return result
+
+    # 6️⃣ CALL 4 (mín 36h)
+    c4 = get_next(group, w2["activity_completed_at"], "call")
+    if c4 is None:
+        result["fail_step"] = "Sin llamada 4"
+        return result
+
+    delay_h = hours_between(w2["activity_completed_at"], c4["activity_completed_at"])
+    if delay_h >= 36 and delay_h <= max_call_4_hours:
+        result["call_4_ok"] = True
+    else:
+        result["fail_step"] = "Call 4 fuera de tiempo"
+        return result
+
+    # 7️⃣ WPP 3
+    w3 = get_next(group, c4["activity_completed_at"], "whatsapp")
+    if w3 is None:
+        result["fail_step"] = "Sin WhatsApp 3"
+        return result
+
+    delay = minutes_between(c4["activity_completed_at"], w3["activity_completed_at"])
+    if delay <= max_wpp_3_min:
+        result["whatsapp_3_ok"] = True
+    else:
+        result["fail_step"] = "WhatsApp 3 fuera de tiempo"
+        return result
+
+    result["full_flow_ok"] = True
     return result
-
 
 def evaluate_lead_with_time(group):
     group = group.sort_values("activity_completed_at").copy()
@@ -361,6 +418,13 @@ def card(title, value, subtitle=""):
 st.title("📞 Flujo de tratamiento de leads perdidos")
 
 with st.sidebar:
+    max_call_1_min = st.number_input("Max llamada 1 (min)", 1, 600, 5)
+max_wpp_1_min = st.number_input("Max WhatsApp 1 (min)", 1, 600, 5)
+max_call_2_hours = st.number_input("Max llamada 2 (h)", 1, 48, 4)
+max_call_3_hours = st.number_input("Max llamada 3 (h)", 1, 72, 24)
+max_wpp_2_min = st.number_input("Max WhatsApp 2 (min)", 1, 600, 5)
+max_call_4_hours = st.number_input("Max llamada 4 (h)", 1, 96, 48)
+max_wpp_3_min = st.number_input("Max WhatsApp 3 (min)", 1, 600, 5)
     st.header("Configuración")
     mode = st.radio("Modo de validación", ["Solo secuencia", "Secuencia + tiempos"])
 
