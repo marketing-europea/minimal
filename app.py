@@ -629,9 +629,7 @@ if page == "Uso de carrusel telefonico":
             carrousel_df[col] = default_value
 
     agents = sorted(carrousel_df["agent"].dropna().unique().tolist())
-    selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
-    # NUEVO FILTRO POR ESTADO DEL CARRUSEL
     carrousel_status_options = [
         "Todos",
         "Uso ideal",
@@ -639,15 +637,24 @@ if page == "Uso de carrusel telefonico":
         "Incorrecto",
         "Sin llamadas",
     ]
-    selected_carrousel_status = st.selectbox(
-        "Filtrar por uso de carrusel",
-        carrousel_status_options
-    )
+
+    with st.sidebar:
+        st.header("Filtros carrusel")
+        selected_agent_carrousel = st.selectbox(
+            "Agente",
+            ["Todos"] + agents,
+            key="selected_agent_carrousel"
+        )
+        selected_carrousel_status = st.selectbox(
+            "Estado del carrusel",
+            carrousel_status_options,
+            key="selected_carrousel_status"
+        )
 
     view = carrousel_df.copy()
 
-    if selected_agent != "Todos":
-        view = view[view["agent"] == selected_agent].copy()
+    if selected_agent_carrousel != "Todos":
+        view = view[view["agent"] == selected_agent_carrousel].copy()
 
     if selected_carrousel_status != "Todos":
         view = view[view["carrousel_status"] == selected_carrousel_status].copy()
