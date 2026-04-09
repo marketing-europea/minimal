@@ -406,7 +406,22 @@ def card(title, value, subtitle=""):
         unsafe_allow_html=True,
     )
 
-
+def compute_flow_usage_score(df: pd.DataFrame) -> pd.Series:
+    """
+    Calcula un score simple de uso del flujo por lead:
+    % de pasos del flujo completados sobre 7 pasos posibles.
+    """
+    step_cols = [
+        "has_call_1",
+        "has_wpp_1",
+        "has_call_2",
+        "has_call_3",
+        "has_wpp_2",
+        "has_call_4",
+        "has_wpp_3",
+    ]
+    return df[step_cols].sum(axis=1) / len(step_cols) * 100
+    
 st.title("📞 Analisis de leads y llamadas")
 
 with st.sidebar:
