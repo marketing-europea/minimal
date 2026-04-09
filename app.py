@@ -1,8 +1,10 @@
-import streamlit as st
-import pandas as pd
+import re
 from datetime import time, timedelta
 
-st.set_page_config(page_title="Flujo de Leads Perdidos", layout="wide")
+import pandas as pd
+import streamlit as st
+
+st.set_page_config(page_title="Análisis de Leads", layout="wide")
 
 CALL_TYPES = {
     "Lead pendiente de llamar",
@@ -28,6 +30,25 @@ def classify_activity(value):
     if value in WHATSAPP_TYPES:
         return "whatsapp"
     return "other"
+
+
+def extract_origin_phone(subject):
+    """
+    Extrae el teléfono origen completo desde 'Actividad - Asunto'.
+    Ejemplo:
+    'LLamada saliente (00:00:12) de +34604574139 (Ventas) a +34696481998 (Benito)'
+    -> '+34604574139'
+    """
+    if pd.isna(subject):
+        return None
+
+    text = str(subject)
+
+    match = re.search(r"\bde\s+(\+\d{7,20})\b", text)
+    if match:
+        return match.group(1)
+
+    return None
 
 
 def pct(series):
@@ -58,7 +79,7 @@ def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
     start_t = time(start_hour, 0)
     end_t = time(end_hour, 0)
 
-    # domingo -> lunes 09:00
+    # Domingo -> lunes 09:00
     if dt.weekday() == 6:
         return (dt + timedelta(days=1)).replace(
             hour=start_hour, minute=0, second=0, microsecond=0
@@ -66,12 +87,15 @@ def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
 
     current_t = dt.time()
 
+    # Antes de apertura
     if current_t < start_t:
         return dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
 
+    # Dentro de horario
     if start_t <= current_t <= end_t:
         return dt
 
+    # Después de cierre
     return next_open_day(dt).replace(
         hour=start_hour, minute=0, second=0, microsecond=0
     )
@@ -115,7 +139,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
     calls = group[group["activity_group"] == "call"].sort_values("activity_completed_at")
     wpps = group[group["activity_group"] == "whatsapp"].sort_values("activity_completed_at")
 
-    # 1) Llamada 1: primera llamada desde creación normalizada
+    # 1) Llamada 1
     call_1 = calls[calls["activity_completed_at"] >= result["normalized_created_at"]]
     if not call_1.empty:
         result["call_1_at"] = call_1.iloc[0]["activity_completed_at"]
@@ -124,7 +148,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
             minutes_between(result["normalized_created_at"], result["call_1_at"]), 2
         )
 
-    # 2) WhatsApp 1: primer WhatsApp después de llamada 1
+    # 2) WhatsApp 1
     if result["has_call_1"]:
         wpp_1 = wpps[wpps["activity_completed_at"] > result["call_1_at"]]
         if not wpp_1.empty:
@@ -134,7 +158,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_1_at"], result["wpp_1_at"]), 2
             )
 
-    # 3) Llamada 2: siguiente llamada después de llamada 1
+    # 3) Llamada 2
     if result["has_call_1"]:
         call_2 = calls[calls["activity_completed_at"] > result["call_1_at"]]
         if not call_2.empty:
@@ -146,7 +170,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_2_at"]), 2
             )
 
-    # 4) Llamada 3: siguiente llamada después de llamada 2
+    # 4) Llamada 3
     if result["has_call_2"]:
         call_3 = calls[calls["activity_completed_at"] > result["call_2_at"]]
         if not call_3.empty:
@@ -156,7 +180,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(result["call_2_at"], result["call_3_at"]), 2
             )
 
-    # 5) WhatsApp 2: siguiente WhatsApp después de llamada 3
+    # 5) WhatsApp 2
     if result["has_call_3"]:
         wpp_2 = wpps[wpps["activity_completed_at"] > result["call_3_at"]]
         if not wpp_2.empty:
@@ -166,7 +190,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_3_at"], result["wpp_2_at"]), 2
             )
 
-    # 6) Llamada 4: siguiente llamada después de llamada 3
+    # 6) Llamada 4
     if result["has_call_3"]:
         call_4 = calls[calls["activity_completed_at"] > result["call_3_at"]]
         if not call_4.empty:
@@ -178,7 +202,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_4_at"]), 2
             )
 
-    # 7) WhatsApp 3: siguiente WhatsApp después de llamada 4
+    # 7) WhatsApp 3
     if result["has_call_4"]:
         wpp_3 = wpps[wpps["activity_completed_at"] > result["call_4_at"]]
         if not wpp_3.empty:
@@ -187,6 +211,54 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
             result["wpp_3_delay_min"] = round(
                 minutes_between(result["call_4_at"], result["wpp_3_at"]), 2
             )
+
+    return result
+
+
+def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
+    group = group.sort_values("activity_completed_at").copy()
+    calls = group[group["activity_group"] == "call"].copy()
+    calls = calls[calls["origin_phone"].notna()].copy()
+
+    result = {
+        "lead_id": group["lead_id"].iloc[0],
+        "agent": group["agent"].iloc[0],
+        "lead_created_at": group["lead_created_at"].iloc[0],
+        "num_calls_with_phone": 0,
+        "unique_origin_phones": 0,
+        "first_4_calls_unique_phones": 0,
+        "first_4_calls_same_phone_3plus": False,
+        "max_repeats_same_phone_first_4": 0,
+        "carrousel_status": "Sin llamadas",
+        "phones_sequence": "",
+    }
+
+    if calls.empty:
+        return result
+
+    first_calls = calls.head(4).copy()
+    phones = first_calls["origin_phone"].tolist()
+
+    result["num_calls_with_phone"] = len(calls)
+    result["unique_origin_phones"] = calls["origin_phone"].nunique()
+    result["first_4_calls_unique_phones"] = len(set(phones))
+    result["phones_sequence"] = " | ".join(phones)
+
+    counts = first_calls["origin_phone"].value_counts()
+    max_repeats = int(counts.max()) if not counts.empty else 0
+    result["max_repeats_same_phone_first_4"] = max_repeats
+
+    if len(first_calls) < 2:
+        result["carrousel_status"] = "Muy pocas llamadas"
+    elif max_repeats >= 3:
+        result["first_4_calls_same_phone_3plus"] = True
+        result["carrousel_status"] = "No usa bien carrusel"
+    elif len(set(phones)) >= 3:
+        result["carrousel_status"] = "Uso ideal"
+    elif len(set(phones)) == 2:
+        result["carrousel_status"] = "Uso parcial"
+    else:
+        result["carrousel_status"] = "No usa bien carrusel"
 
     return result
 
@@ -201,6 +273,7 @@ def load_data(uploaded_file):
         "Actividad - Hora en que se marcó como completada",
         "Negocio - Propietario",
         "Actividad - Tipo",
+        "Actividad - Asunto",
     ]
 
     missing = [c for c in required_cols if c not in raw.columns]
@@ -214,6 +287,7 @@ def load_data(uploaded_file):
             "Actividad - Hora en que se marcó como completada": "activity_completed_at",
             "Negocio - Propietario": "agent",
             "Actividad - Tipo": "activity_type",
+            "Actividad - Asunto": "activity_subject",
         }
     ).copy()
 
@@ -222,6 +296,7 @@ def load_data(uploaded_file):
     df["lead_created_at"] = pd.to_datetime(df["lead_created_at"], errors="coerce")
     df["activity_completed_at"] = pd.to_datetime(df["activity_completed_at"], errors="coerce")
     df["activity_group"] = df["activity_type"].apply(classify_activity)
+    df["origin_phone"] = df["activity_subject"].apply(extract_origin_phone)
 
     df = df.dropna(subset=["lead_id", "lead_created_at", "activity_completed_at", "agent"])
     df = df[df["activity_group"].isin(["call", "whatsapp"])].copy()
@@ -247,6 +322,14 @@ def build_milestones(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@st.cache_data
+def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, group in df.groupby("lead_id", sort=False):
+        rows.append(analyze_phone_carrousel(group))
+    return pd.DataFrame(rows)
+
+
 def card(title, value, subtitle=""):
     st.markdown(
         f"""
@@ -268,17 +351,23 @@ def card(title, value, subtitle=""):
     )
 
 
-st.title("📞 Flujo de tratamiento de leads perdidos")
+st.title("📞 Análisis de leads y llamadas")
 
 with st.sidebar:
-    st.header("Filtros de tiempo")
-    max_call_1_min = st.number_input("Límite Llamada 1 (min)", min_value=1, max_value=1440, value=5)
-    max_wpp_1_min = st.number_input("Límite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5)
-    max_call_2_h = st.number_input("Límite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5)
-    max_call_3_h = st.number_input("Límite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5)
-    max_wpp_2_min = st.number_input("Límite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5)
-    max_call_4_h = st.number_input("Límite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5)
-    max_wpp_3_min = st.number_input("Límite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5)
+    page = st.radio(
+        "Selecciona análisis",
+        ["Flujo de tratamiento", "Uso de carrusel telefónico"]
+    )
+
+    if page == "Flujo de tratamiento":
+        st.header("Filtros de tiempo")
+        max_call_1_min = st.number_input("Límite Llamada 1 (min)", min_value=1, max_value=1440, value=5)
+        max_wpp_1_min = st.number_input("Límite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5)
+        max_call_2_h = st.number_input("Límite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5)
+        max_call_3_h = st.number_input("Límite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5)
+        max_wpp_2_min = st.number_input("Límite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5)
+        max_call_4_h = st.number_input("Límite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5)
+        max_wpp_3_min = st.number_input("Límite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5)
 
 uploaded_file = st.file_uploader("Sube el Excel de actividades", type=["xlsx"])
 
@@ -291,6 +380,66 @@ try:
 except Exception as exc:
     st.error(str(exc))
     st.stop()
+
+if page == "Uso de carrusel telefónico":
+    carrousel_df = build_carrousel_analysis(df)
+
+    agents = sorted(carrousel_df["agent"].dropna().unique().tolist())
+    selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
+
+    view = carrousel_df if selected_agent == "Todos" else carrousel_df[carrousel_df["agent"] == selected_agent].copy()
+
+    if view.empty:
+        st.warning("No hay leads para el filtro seleccionado.")
+        st.stop()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Leads analizados", len(view))
+    c2.metric(
+        "Uso ideal",
+        f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%"
+    )
+    c3.metric(
+        "Uso parcial",
+        f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%"
+    )
+    c4.metric(
+        "No usa bien carrusel",
+        f"{round((view['carrousel_status'] == 'No usa bien carrusel').mean() * 100, 1):.1f}%"
+    )
+
+    st.subheader("Resumen por agente")
+    summary = (
+        carrousel_df.groupby("agent")
+        .agg(
+            leads=("lead_id", "nunique"),
+            llamadas_con_numero=("num_calls_with_phone", "mean"),
+            telefonos_unicos=("unique_origin_phones", "mean"),
+            uso_ideal=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
+            uso_parcial=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
+            mal_uso=("carrousel_status", lambda s: round((s == "No usa bien carrusel").mean() * 100, 1)),
+        )
+        .reset_index()
+        .sort_values("mal_uso", ascending=False)
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    st.subheader("Detalle por lead")
+    detail_cols = [
+        "lead_id",
+        "agent",
+        "num_calls_with_phone",
+        "unique_origin_phones",
+        "first_4_calls_unique_phones",
+        "max_repeats_same_phone_first_4",
+        "first_4_calls_same_phone_3plus",
+        "carrousel_status",
+        "phones_sequence",
+    ]
+    st.dataframe(view[detail_cols], use_container_width=True, hide_index=True)
+    st.stop()
+
+# ===== PÁGINA FLUJO =====
 
 milestones = build_milestones(df)
 
