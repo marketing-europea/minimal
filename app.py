@@ -46,7 +46,6 @@ def extract_origin_phone(subject):
     match = re.search(r"\bde\s+(\+\d{7,20})\b", text)
     if match:
         return match.group(1)
-
     return None
 
 
@@ -238,7 +237,7 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     result["unique_origin_phones"] = unique_phones
     result["phones_sequence"] = " | ".join(phones)
 
-    # maximo esperable: 3 lineas distintas
+    # Maximo esperable: 3 lineas distintas
     expected_unique = min(num_calls, 3)
     result["expected_unique_phones"] = expected_unique
 
@@ -255,28 +254,21 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     return result
 
 
+def resolve_completed_column(columns):
+    if "Actividad - Hora en que se marcó como completada" in columns:
+        return "Actividad - Hora en que se marcó como completada"
+    if "Actividad - Hora en que se marco como completada" in columns:
+        return "Actividad - Hora en que se marco como completada"
+    return None
+
+
 @st.cache_data
 def load_data(uploaded_file):
     raw = pd.read_excel(uploaded_file)
 
-    required_cols = [
-        "Negocio - ID",
-        "Negocio - Negocio creado el",
-        "Actividad - Hora en que se marco como completada",
-        "Negocio - Propietario",
-        "Actividad - Tipo",
-        "Actividad - Asunto",
-    ]
+    completed_col = resolve_completed_column(raw.columns)
 
-    # Compatibilidad con columna con tilde o sin tilde
-    if "Actividad - Hora en que se marcó como completada" in raw.columns:
-        completed_col = "Actividad - Hora en que se marcó como completada"
-    elif "Actividad - Hora en que se marco como completada" in raw.columns:
-        completed_col = "Actividad - Hora en que se marco como completada"
-    else:
-        completed_col = None
-
-    required_dynamic = [
+    required_base = [
         "Negocio - ID",
         "Negocio - Negocio creado el",
         "Negocio - Propietario",
@@ -284,7 +276,7 @@ def load_data(uploaded_file):
         "Actividad - Asunto",
     ]
 
-    missing = [c for c in required_dynamic if c not in raw.columns]
+    missing = [c for c in required_base if c not in raw.columns]
     if completed_col is None:
         missing.append("Actividad - Hora en que se marco/marcó como completada")
 
@@ -330,7 +322,42 @@ def build_milestones(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for _, group in df.groupby("lead_id", sort=False):
         rows.append(extract_lead_milestones(group))
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+
+    expected_cols = {
+        "lead_id": None,
+        "agent": None,
+        "lead_created_at": pd.NaT,
+        "normalized_created_at": pd.NaT,
+        "was_normalized": False,
+        "call_1_at": pd.NaT,
+        "wpp_1_at": pd.NaT,
+        "call_2_at": pd.NaT,
+        "call_3_at": pd.NaT,
+        "wpp_2_at": pd.NaT,
+        "call_4_at": pd.NaT,
+        "wpp_3_at": pd.NaT,
+        "has_call_1": False,
+        "has_wpp_1": False,
+        "has_call_2": False,
+        "has_call_3": False,
+        "has_wpp_2": False,
+        "has_call_4": False,
+        "has_wpp_3": False,
+        "call_1_delay_min": None,
+        "wpp_1_delay_min": None,
+        "call_2_delay_h": None,
+        "call_3_delay_h": None,
+        "wpp_2_delay_min": None,
+        "call_4_delay_h": None,
+        "wpp_3_delay_min": None,
+    }
+
+    for col, default_value in expected_cols.items():
+        if col not in out.columns:
+            out[col] = default_value
+
+    return out
 
 
 @st.cache_data
@@ -338,7 +365,25 @@ def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for _, group in df.groupby("lead_id", sort=False):
         rows.append(analyze_phone_carrousel(group))
-    return pd.DataFrame(rows)
+
+    out = pd.DataFrame(rows)
+
+    expected_cols = {
+        "lead_id": None,
+        "agent": None,
+        "lead_created_at": pd.NaT,
+        "num_calls_with_phone": 0,
+        "unique_origin_phones": 0,
+        "expected_unique_phones": 0,
+        "carrousel_status": "Sin llamadas",
+        "phones_sequence": "",
+    }
+
+    for col, default_value in expected_cols.items():
+        if col not in out.columns:
+            out[col] = default_value
+
+    return out
 
 
 def card(title, value, subtitle=""):
@@ -370,7 +415,7 @@ with st.sidebar:
         ["Flujo de tratamiento", "Uso de carrusel telefonico"]
     )
 
-    # valores por defecto para evitar NameError
+    # valores por defecto
     max_call_1_min = 5
     max_wpp_1_min = 5
     max_call_2_h = 4.0
@@ -407,6 +452,19 @@ except Exception as exc:
 if page == "Uso de carrusel telefonico":
     carrousel_df = build_carrousel_analysis(df)
 
+    # blindaje extra
+    for col, default_value in {
+        "lead_id": None,
+        "agent": None,
+        "num_calls_with_phone": 0,
+        "unique_origin_phones": 0,
+        "expected_unique_phones": 0,
+        "carrousel_status": "Sin llamadas",
+        "phones_sequence": "",
+    }.items():
+        if col not in carrousel_df.columns:
+            carrousel_df[col] = default_value
+
     agents = sorted(carrousel_df["agent"].dropna().unique().tolist())
     selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
@@ -418,25 +476,13 @@ if page == "Uso de carrusel telefonico":
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Leads analizados", len(view))
-    c2.metric(
-        "Uso ideal",
-        f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%"
-    )
-    c3.metric(
-        "Uso parcial",
-        f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%"
-    )
-    c4.metric(
-        "Incorrecto",
-        f"{round((view['carrousel_status'] == 'Incorrecto').mean() * 100, 1):.1f}%"
-    )
-    c5.metric(
-        "Sin llamadas",
-        f"{round((view['carrousel_status'] == 'Sin llamadas').mean() * 100, 1):.1f}%"
-    )
+    c2.metric("Uso ideal", f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%")
+    c3.metric("Uso parcial", f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%")
+    c4.metric("Incorrecto", f"{round((view['carrousel_status'] == 'Incorrecto').mean() * 100, 1):.1f}%")
+    c5.metric("Sin llamadas", f"{round((view['carrousel_status'] == 'Sin llamadas').mean() * 100, 1):.1f}%")
 
     st.subheader("Resumen por agente")
-    summary = (
+    summary_carrousel = (
         carrousel_df.groupby("agent")
         .agg(
             leads=("lead_id", "nunique"),
@@ -451,7 +497,7 @@ if page == "Uso de carrusel telefonico":
         .reset_index()
         .sort_values("incorrecto", ascending=False)
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary_carrousel, use_container_width=True, hide_index=True)
 
     st.subheader("Distribucion de estados")
     status_dist = (
@@ -464,7 +510,7 @@ if page == "Uso de carrusel telefonico":
     st.dataframe(status_dist, use_container_width=True, hide_index=True)
 
     st.subheader("Detalle por lead")
-    detail_cols = [
+    detail_cols_carrousel = [
         "lead_id",
         "agent",
         "num_calls_with_phone",
@@ -473,7 +519,7 @@ if page == "Uso de carrusel telefonico":
         "carrousel_status",
         "phones_sequence",
     ]
-    st.dataframe(view[detail_cols], use_container_width=True, hide_index=True)
+    st.dataframe(view[detail_cols_carrousel], use_container_width=True, hide_index=True)
     st.stop()
 
 # =========================
@@ -661,7 +707,7 @@ available_cols = [c for c in detail_cols if c in step_detail.columns]
 st.dataframe(step_detail[available_cols], use_container_width=True, hide_index=True)
 
 st.subheader("Resumen por agente")
-summary = (
+summary_flow = (
     milestones.groupby("agent")
     .agg(
         leads=("lead_id", "nunique"),
@@ -678,4 +724,4 @@ summary = (
     .sort_values("leads", ascending=False)
 )
 
-st.dataframe(summary, use_container_width=True, hide_index=True)
+st.dataframe(summary_flow, use_container_width=True, hide_index=True)
