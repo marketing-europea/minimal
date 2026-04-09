@@ -390,20 +390,24 @@ if page == "Uso de carrusel telefónico":
         st.warning("No hay leads para el filtro seleccionado.")
         st.stop()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Leads analizados", len(view))
-    c2.metric(
-        "Uso ideal",
-        f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%"
-    )
-    c3.metric(
-        "Uso parcial",
-        f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%"
-    )
-    c4.metric(
-        "No usa bien carrusel",
-        f"{round((view['carrousel_status'] == 'No usa bien carrusel').mean() * 100, 1):.1f}%"
-    )
+    c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Leads analizados", len(view))
+c2.metric(
+    "Uso ideal",
+    f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%"
+)
+c3.metric(
+    "Uso parcial",
+    f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%"
+)
+c4.metric(
+    "Incorrecto",
+    f"{round((view['carrousel_status'] == 'Incorrecto').mean() * 100, 1):.1f}%"
+)
+c5.metric(
+    "Sin llamadas",
+    f"{round((view['carrousel_status'] == 'Sin llamadas').mean() * 100, 1):.1f}%"
+)
 
     st.subheader("Resumen por agente")
     summary = (
@@ -420,6 +424,15 @@ if page == "Uso de carrusel telefónico":
         .sort_values("mal_uso", ascending=False)
     )
     st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.subheader("Distribución de estados")
+status_dist = (
+    view["carrousel_status"]
+    .value_counts(dropna=False)
+    .rename_axis("estado")
+    .reset_index(name="num_leads")
+)
+status_dist["porcentaje"] = (status_dist["num_leads"] / len(view) * 100).round(1)
+st.dataframe(status_dist, use_container_width=True, hide_index=True)
 
     st.subheader("Detalle por lead")
     detail_cols = [
