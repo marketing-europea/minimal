@@ -454,10 +454,14 @@ def card(title, value, subtitle=""):
 
 st.title("📞 Analisis de leads y llamadas")
 
+# -------------------------
+# SIDEBAR PRINCIPAL
+# -------------------------
 with st.sidebar:
     page = st.radio(
         "Selecciona analisis",
-        ["Resumen / resultados", "Flujo de tratamiento", "Uso de carrusel telefonico"]
+        ["Resumen / resultados", "Flujo de tratamiento", "Uso de carrusel telefonico"],
+        key="page_selector",
     )
 
     max_call_1_min = 5
@@ -470,13 +474,27 @@ with st.sidebar:
 
     if page in ["Resumen / resultados", "Flujo de tratamiento"]:
         st.header("Filtros de tiempo")
-        max_call_1_min = st.number_input("Limite Llamada 1 (min)", min_value=1, max_value=1440, value=5)
-        max_wpp_1_min = st.number_input("Limite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5)
-        max_call_2_h = st.number_input("Limite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5)
-        max_call_3_h = st.number_input("Limite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5)
-        max_wpp_2_min = st.number_input("Limite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5)
-        max_call_4_h = st.number_input("Limite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5)
-        max_wpp_3_min = st.number_input("Limite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5)
+        max_call_1_min = st.number_input(
+            "Limite Llamada 1 (min)", min_value=1, max_value=1440, value=5, key="max_call_1_min"
+        )
+        max_wpp_1_min = st.number_input(
+            "Limite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_1_min"
+        )
+        max_call_2_h = st.number_input(
+            "Limite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5, key="max_call_2_h"
+        )
+        max_call_3_h = st.number_input(
+            "Limite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5, key="max_call_3_h"
+        )
+        max_wpp_2_min = st.number_input(
+            "Limite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_2_min"
+        )
+        max_call_4_h = st.number_input(
+            "Limite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5, key="max_call_4_h"
+        )
+        max_wpp_3_min = st.number_input(
+            "Limite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_3_min"
+        )
 
 uploaded_file = st.file_uploader("Sube el Excel de actividades", type=["xlsx"])
 
@@ -498,8 +516,8 @@ available_months = [MONTHS_ES[m] for m in available_months_num]
 
 with st.sidebar:
     st.header("Filtros generales")
-    selected_year = st.selectbox("Año", ["Todos"] + available_years)
-    selected_month = st.selectbox("Mes", ["Todos"] + available_months)
+    selected_year = st.selectbox("Año", ["Todos"] + available_years, key="selected_year")
+    selected_month = st.selectbox("Mes", ["Todos"] + available_months, key="selected_month")
 
 # =========================
 # PAGINA RESUMEN / RESULTADOS
@@ -628,7 +646,7 @@ if page == "Uso de carrusel telefonico":
         if col not in carrousel_df.columns:
             carrousel_df[col] = default_value
 
-    agents = sorted(carrousel_df["agent"].dropna().unique().tolist())
+    agents_carrousel = sorted(carrousel_df["agent"].dropna().unique().tolist())
 
     carrousel_status_options = [
         "Todos",
@@ -642,7 +660,7 @@ if page == "Uso de carrusel telefonico":
         st.header("Filtros carrusel")
         selected_agent_carrousel = st.selectbox(
             "Agente",
-            ["Todos"] + agents,
+            ["Todos"] + agents_carrousel,
             key="selected_agent_carrousel"
         )
         selected_carrousel_status = st.selectbox(
@@ -710,7 +728,8 @@ if page == "Uso de carrusel telefonico":
         "carrousel_status",
         "phones_sequence",
     ]
-    st.dataframe(view[detail_cols_carrousel], use_container_width=True, hide_index=True)
+    available_cols_carrousel = [c for c in detail_cols_carrousel if c in view.columns]
+    st.dataframe(view[available_cols_carrousel], use_container_width=True, hide_index=True)
     st.stop()
 
 # =========================
@@ -719,10 +738,17 @@ if page == "Uso de carrusel telefonico":
 milestones = build_milestones(df)
 milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
 
-agents = sorted(milestones["agent"].dropna().unique().tolist())
-selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
+agents_flow = sorted(milestones["agent"].dropna().unique().tolist())
 
-view = milestones if selected_agent == "Todos" else milestones[milestones["agent"] == selected_agent].copy()
+with st.sidebar:
+    st.header("Filtros flujo")
+    selected_agent_flow = st.selectbox(
+        "Agente",
+        ["Todos"] + agents_flow,
+        key="selected_agent_flow"
+    )
+
+view = milestones if selected_agent_flow == "Todos" else milestones[milestones["agent"] == selected_agent_flow].copy()
 
 if view.empty:
     st.warning("No hay leads para el filtro seleccionado.")
@@ -741,7 +767,7 @@ normalized_pct = round(view["was_normalized"].mean() * 100, 1) if len(view) else
 c1, c2, c3 = st.columns(3)
 c1.metric("Leads analizados", len(view))
 c2.metric("Leads normalizados", f"{normalized_pct:.1f}%")
-c3.metric("Agente", selected_agent)
+c3.metric("Agente", selected_agent_flow)
 
 flow_metrics = {
     "Llamada 1": pct(view["has_call_1"]),
@@ -852,6 +878,7 @@ selected_step = st.selectbox(
         "Llamada 4",
         "WhatsApp 3",
     ],
+    key="selected_step_flow"
 )
 
 step_map = {
