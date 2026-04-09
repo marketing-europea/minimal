@@ -58,7 +58,8 @@ def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
     start_t = time(start_hour, 0)
     end_t = time(end_hour, 0)
 
-    if dt.weekday() == 6:  # domingo
+    # domingo -> lunes 09:00
+    if dt.weekday() == 6:
         return (dt + timedelta(days=1)).replace(
             hour=start_hour, minute=0, second=0, microsecond=0
         )
@@ -114,7 +115,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
     calls = group[group["activity_group"] == "call"].sort_values("activity_completed_at")
     wpps = group[group["activity_group"] == "whatsapp"].sort_values("activity_completed_at")
 
-    # Llamada 1: primera llamada desde creación normalizada
+    # 1) Llamada 1: primera llamada desde creación normalizada
     call_1 = calls[calls["activity_completed_at"] >= result["normalized_created_at"]]
     if not call_1.empty:
         result["call_1_at"] = call_1.iloc[0]["activity_completed_at"]
@@ -123,7 +124,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
             minutes_between(result["normalized_created_at"], result["call_1_at"]), 2
         )
 
-    # WhatsApp 1: primer WhatsApp después de llamada 1
+    # 2) WhatsApp 1: primer WhatsApp después de llamada 1
     if result["has_call_1"]:
         wpp_1 = wpps[wpps["activity_completed_at"] > result["call_1_at"]]
         if not wpp_1.empty:
@@ -133,7 +134,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_1_at"], result["wpp_1_at"]), 2
             )
 
-    # Llamada 2: siguiente llamada después de llamada 1
+    # 3) Llamada 2: siguiente llamada después de llamada 1
     if result["has_call_1"]:
         call_2 = calls[calls["activity_completed_at"] > result["call_1_at"]]
         if not call_2.empty:
@@ -145,7 +146,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_2_at"]), 2
             )
 
-    # Llamada 3: siguiente llamada después de llamada 2
+    # 4) Llamada 3: siguiente llamada después de llamada 2
     if result["has_call_2"]:
         call_3 = calls[calls["activity_completed_at"] > result["call_2_at"]]
         if not call_3.empty:
@@ -155,7 +156,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(result["call_2_at"], result["call_3_at"]), 2
             )
 
-    # WhatsApp 2: siguiente whatsapp después de llamada 3
+    # 5) WhatsApp 2: siguiente WhatsApp después de llamada 3
     if result["has_call_3"]:
         wpp_2 = wpps[wpps["activity_completed_at"] > result["call_3_at"]]
         if not wpp_2.empty:
@@ -165,7 +166,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_3_at"], result["wpp_2_at"]), 2
             )
 
-    # Llamada 4: siguiente llamada después de llamada 3
+    # 6) Llamada 4: siguiente llamada después de llamada 3
     if result["has_call_3"]:
         call_4 = calls[calls["activity_completed_at"] > result["call_3_at"]]
         if not call_4.empty:
@@ -177,7 +178,7 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_4_at"]), 2
             )
 
-    # WhatsApp 3: siguiente whatsapp después de llamada 4
+    # 7) WhatsApp 3: siguiente WhatsApp después de llamada 4
     if result["has_call_4"]:
         wpp_3 = wpps[wpps["activity_completed_at"] > result["call_4_at"]]
         if not wpp_3.empty:
@@ -297,6 +298,11 @@ agents = sorted(milestones["agent"].dropna().unique().tolist())
 selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
 view = milestones if selected_agent == "Todos" else milestones[milestones["agent"] == selected_agent].copy()
+
+if view.empty:
+    st.warning("No hay leads para el filtro seleccionado.")
+    st.stop()
+
 view["call_1_within_limit"] = view["has_call_1"] & (view["call_1_delay_min"] <= max_call_1_min)
 view["wpp_1_within_limit"] = view["has_wpp_1"] & (view["wpp_1_delay_min"] <= max_wpp_1_min)
 view["call_2_within_limit"] = view["has_call_2"] & (view["call_2_delay_h"] <= max_call_2_h)
@@ -305,10 +311,6 @@ view["wpp_2_within_limit"] = view["has_wpp_2"] & (view["wpp_2_delay_min"] <= max
 view["call_4_within_limit"] = view["has_call_4"] & (view["call_4_delay_h"] <= max_call_4_h)
 view["wpp_3_within_limit"] = view["has_wpp_3"] & (view["wpp_3_delay_min"] <= max_wpp_3_min)
 
-if view.empty:
-    st.warning("No hay leads para el filtro seleccionado.")
-    st.stop()
-
 normalized_pct = round(view["was_normalized"].mean() * 100, 1) if len(view) else 0.0
 
 c1, c2, c3 = st.columns(3)
@@ -316,7 +318,6 @@ c1.metric("Leads analizados", len(view))
 c2.metric("Leads normalizados", f"{normalized_pct:.1f}%")
 c3.metric("Agente", selected_agent)
 
-# NIVEL 1: flujo completo
 flow_metrics = {
     "Llamada 1": pct(view["has_call_1"]),
     "WhatsApp 1": pct(view["has_wpp_1"]),
@@ -336,28 +337,6 @@ limit_metrics = {
     "Llamada 4": pct(view["call_4_within_limit"]),
     "WhatsApp 3": pct(view["wpp_3_within_limit"]),
 }
-
-st.subheader("Flujo completo alcanzado")
-
-r1 = st.columns([1, 1, 1, 1])
-with r1[0]:
-    card("Llamada 1", f"{metrics['Llamada 1']:.1f}%", "del total de leads")
-with r1[1]:
-    card("Llamada 2", f"{metrics['Llamada 2']:.1f}%", "del total de leads")
-with r1[2]:
-    card("Llamada 3", f"{metrics['Llamada 3']:.1f}%", "del total de leads")
-with r1[3]:
-    card("Llamada 4", f"{metrics['Llamada 4']:.1f}%", "del total de leads")
-
-r2 = st.columns([1, 1, 1, 1])
-with r2[0]:
-    card("WhatsApp 1", f"{metrics['WhatsApp 1']:.1f}%", "del total de leads")
-with r2[1]:
-    st.write("")
-with r2[2]:
-    card("WhatsApp 2", f"{metrics['WhatsApp 2']:.1f}%", "del total de leads")
-with r2[3]:
-    card("WhatsApp 3", f"{metrics['WhatsApp 3']:.1f}%", "del total de leads")
 
 st.subheader("Flujo alcanzado")
 r1 = st.columns([1, 1, 1, 1])
@@ -379,7 +358,30 @@ with r2[2]:
     card("WhatsApp 2", f"{flow_metrics['WhatsApp 2']:.1f}%", "del total de leads")
 with r2[3]:
     card("WhatsApp 3", f"{flow_metrics['WhatsApp 3']:.1f}%", "del total de leads")
+
+st.subheader("Flujo dentro del límite configurado")
+r3 = st.columns([1, 1, 1, 1])
+with r3[0]:
+    card("Llamada 1", f"{limit_metrics['Llamada 1']:.1f}%", f"≤ {max_call_1_min} min")
+with r3[1]:
+    card("Llamada 2", f"{limit_metrics['Llamada 2']:.1f}%", f"≤ {max_call_2_h} h")
+with r3[2]:
+    card("Llamada 3", f"{limit_metrics['Llamada 3']:.1f}%", f"≤ {max_call_3_h} h")
+with r3[3]:
+    card("Llamada 4", f"{limit_metrics['Llamada 4']:.1f}%", f"≤ {max_call_4_h} h")
+
+r4 = st.columns([1, 1, 1, 1])
+with r4[0]:
+    card("WhatsApp 1", f"{limit_metrics['WhatsApp 1']:.1f}%", f"≤ {max_wpp_1_min} min")
+with r4[1]:
+    st.write("")
+with r4[2]:
+    card("WhatsApp 2", f"{limit_metrics['WhatsApp 2']:.1f}%", f"≤ {max_wpp_2_min} min")
+with r4[3]:
+    card("WhatsApp 3", f"{limit_metrics['WhatsApp 3']:.1f}%", f"≤ {max_wpp_3_min} min")
+
 time_rows = []
+
 
 def add_time_row(step_name, exists_col, delay_col, limit_value, unit):
     subset = view[view[exists_col] == True].copy()
@@ -391,13 +393,16 @@ def add_time_row(step_name, exists_col, delay_col, limit_value, unit):
         within = (subset[delay_col] <= limit_value).sum()
         pct_within = round(within / total_step * 100, 1)
 
-    time_rows.append({
-        "Paso": step_name,
-        "Leads que llegaron al paso": total_step,
-        "Leads dentro de límite": int(within),
-        "% dentro de límite": pct_within,
-        "Límite aplicado": f"{limit_value} {unit}",
-    })
+    time_rows.append(
+        {
+            "Paso": step_name,
+            "Leads que llegaron al paso": total_step,
+            "Leads dentro de límite": int(within),
+            "% dentro de límite": pct_within,
+            "Límite aplicado": f"{limit_value} {unit}",
+        }
+    )
+
 
 add_time_row("Llamada 1", "has_call_1", "call_1_delay_min", max_call_1_min, "min")
 add_time_row("WhatsApp 1", "has_wpp_1", "wpp_1_delay_min", max_wpp_1_min, "min")
@@ -407,6 +412,7 @@ add_time_row("WhatsApp 2", "has_wpp_2", "wpp_2_delay_min", max_wpp_2_min, "min")
 add_time_row("Llamada 4", "has_call_4", "call_4_delay_h", max_call_4_h, "h")
 add_time_row("WhatsApp 3", "has_wpp_3", "wpp_3_delay_min", max_wpp_3_min, "min")
 
+st.subheader("Cumplimiento temporal sobre los leads que sí llegaron al paso")
 time_summary = pd.DataFrame(time_rows)
 st.dataframe(time_summary, use_container_width=True, hide_index=True)
 
@@ -420,20 +426,20 @@ selected_step = st.selectbox(
         "WhatsApp 2",
         "Llamada 4",
         "WhatsApp 3",
-    ]
+    ],
 )
 
 step_map = {
-    "Llamada 1": ("has_call_1", "call_1_delay_min", max_call_1_min, "min"),
-    "WhatsApp 1": ("has_wpp_1", "wpp_1_delay_min", max_wpp_1_min, "min"),
-    "Llamada 2": ("has_call_2", "call_2_delay_h", max_call_2_h, "h"),
-    "Llamada 3": ("has_call_3", "call_3_delay_h", max_call_3_h, "h"),
-    "WhatsApp 2": ("has_wpp_2", "wpp_2_delay_min", max_wpp_2_min, "min"),
-    "Llamada 4": ("has_call_4", "call_4_delay_h", max_call_4_h, "h"),
-    "WhatsApp 3": ("has_wpp_3", "wpp_3_delay_min", max_wpp_3_min, "min"),
+    "Llamada 1": ("has_call_1", "call_1_delay_min", max_call_1_min),
+    "WhatsApp 1": ("has_wpp_1", "wpp_1_delay_min", max_wpp_1_min),
+    "Llamada 2": ("has_call_2", "call_2_delay_h", max_call_2_h),
+    "Llamada 3": ("has_call_3", "call_3_delay_h", max_call_3_h),
+    "WhatsApp 2": ("has_wpp_2", "wpp_2_delay_min", max_wpp_2_min),
+    "Llamada 4": ("has_call_4", "call_4_delay_h", max_call_4_h),
+    "WhatsApp 3": ("has_wpp_3", "wpp_3_delay_min", max_wpp_3_min),
 }
 
-exists_col, delay_col, limit_value, unit = step_map[selected_step]
+exists_col, delay_col, limit_value = step_map[selected_step]
 step_detail = view[view[exists_col] == True].copy()
 if not step_detail.empty:
     step_detail["within_limit"] = step_detail[delay_col] <= limit_value
