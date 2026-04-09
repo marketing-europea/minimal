@@ -529,6 +529,29 @@ if page == "Resumen / resultados":
     milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
     carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
 
+    carrousel_status_options_resumen = [
+        "Todos",
+        "Uso ideal",
+        "Uso parcial",
+        "Incorrecto",
+        "Sin llamadas",
+    ]
+
+    with st.sidebar:
+        st.header("Filtros resumen")
+        selected_carrousel_status_resumen = st.selectbox(
+            "Estado carrusel para el grafico",
+            carrousel_status_options_resumen,
+            key="selected_carrousel_status_resumen"
+        )
+
+    carrousel_df_chart = carrousel_df.copy()
+
+    if selected_carrousel_status_resumen != "Todos":
+        carrousel_df_chart = carrousel_df_chart[
+            carrousel_df_chart["carrousel_status"] == selected_carrousel_status_resumen
+        ].copy()
+
     if milestones.empty:
         st.warning("No hay datos para los filtros seleccionados.")
         st.stop()
@@ -564,9 +587,9 @@ if page == "Resumen / resultados":
         .reset_index()
     )
 
-    if not carrousel_df.empty:
+    if not carrousel_df_chart.empty:
         carrousel_agent_summary = (
-            carrousel_df.groupby("agent")
+            carrousel_df_chart.groupby("agent")
             .agg(
                 leads_carrousel=("lead_id", "nunique"),
                 uso_ideal_carrusel=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
@@ -593,9 +616,19 @@ if page == "Resumen / resultados":
         "Uso medio del flujo",
         f"{flow_agent_summary['uso_flujo_pct'].mean():.1f}%" if not flow_agent_summary.empty else "0.0%"
     )
+
+    metric_col_map = {
+        "Todos": "uso_ideal_carrusel",
+        "Uso ideal": "uso_ideal_carrusel",
+        "Uso parcial": "uso_parcial_carrusel",
+        "Incorrecto": "incorrecto_carrusel",
+        "Sin llamadas": "sin_llamadas_carrusel",
+    }
+    selected_metric_col = metric_col_map[selected_carrousel_status_resumen]
+
     k4.metric(
-        "Uso ideal carrusel",
-        f"{carrousel_agent_summary['uso_ideal_carrusel'].mean():.1f}%" if not carrousel_agent_summary.empty else "0.0%"
+        f"Carrusel · {selected_carrousel_status_resumen}",
+        f"{carrousel_agent_summary[selected_metric_col].mean():.1f}%" if not carrousel_agent_summary.empty else "0.0%"
     )
 
     st.subheader("Grafico 1 · Agente por agente · Quien usa el flujo")
@@ -606,14 +639,16 @@ if page == "Resumen / resultados":
     )
     st.bar_chart(chart_flow_use)
 
-    st.subheader("Grafico 2 · Agente por agente · Quien hace buen uso de carruseles")
+    st.subheader(
+        f"Grafico 2 · Agente por agente · Carrusel filtrado por: {selected_carrousel_status_resumen}"
+    )
     if not carrousel_agent_summary.empty:
-        chart_carrousel_good = (
-            carrousel_agent_summary[["agent", "uso_ideal_carrusel"]]
-            .sort_values("uso_ideal_carrusel", ascending=False)
+        chart_carrousel = (
+            carrousel_agent_summary[["agent", selected_metric_col]]
+            .sort_values(selected_metric_col, ascending=False)
             .set_index("agent")
         )
-        st.bar_chart(chart_carrousel_good)
+        st.bar_chart(chart_carrousel)
     else:
         st.info("No hay datos de carrusel para los filtros seleccionados.")
 
