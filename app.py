@@ -226,9 +226,7 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
         "lead_created_at": group["lead_created_at"].iloc[0],
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
-        "first_4_calls_unique_phones": 0,
-        "first_4_calls_same_phone_3plus": False,
-        "max_repeats_same_phone_first_4": 0,
+        "expected_unique_phones": 0,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
     }
@@ -236,29 +234,28 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     if calls.empty:
         return result
 
-    first_calls = calls.head(4).copy()
-    phones = first_calls["origin_phone"].tolist()
+    phones = calls["origin_phone"].tolist()
+    num_calls = len(phones)
+    unique_phones = len(set(phones))
 
-    result["num_calls_with_phone"] = len(calls)
-    result["unique_origin_phones"] = calls["origin_phone"].nunique()
-    result["first_4_calls_unique_phones"] = len(set(phones))
+    result["num_calls_with_phone"] = num_calls
+    result["unique_origin_phones"] = unique_phones
     result["phones_sequence"] = " | ".join(phones)
 
-    counts = first_calls["origin_phone"].value_counts()
-    max_repeats = int(counts.max()) if not counts.empty else 0
-    result["max_repeats_same_phone_first_4"] = max_repeats
+    # máximo esperable: 3 líneas distintas
+    expected_unique = min(num_calls, 3)
+    result["expected_unique_phones"] = expected_unique
 
-    if len(first_calls) < 2:
-        result["carrousel_status"] = "Muy pocas llamadas"
-    elif max_repeats >= 3:
-        result["first_4_calls_same_phone_3plus"] = True
-        result["carrousel_status"] = "No usa bien carrusel"
-    elif len(set(phones)) >= 3:
-        result["carrousel_status"] = "Uso ideal"
-    elif len(set(phones)) == 2:
-        result["carrousel_status"] = "Uso parcial"
+    # lógica de clasificación
+    if num_calls == 1:
+        result["carrousel_status"] = "Incorrecto"
     else:
-        result["carrousel_status"] = "No usa bien carrusel"
+        if unique_phones >= expected_unique:
+            result["carrousel_status"] = "Uso ideal"
+        elif unique_phones == expected_unique - 1 and expected_unique >= 3:
+            result["carrousel_status"] = "Uso parcial"
+        else:
+            result["carrousel_status"] = "Incorrecto"
 
     return result
 
