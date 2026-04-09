@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import time, timedelta
 
 st.set_page_config(page_title="Flujo de Leads Perdidos", layout="wide")
 
@@ -13,6 +14,9 @@ CALL_TYPES = {
 WHATSAPP_TYPES = {
     "Whatsapp chat",
 }
+
+CALL_START_HOUR = 9
+CALL_END_HOUR = 18
 
 
 def classify_activity(value):
@@ -40,6 +44,47 @@ def pct(s):
     return round(s.mean() * 100, 1)
 
 
+def next_open_day(dt):
+    dt = dt + timedelta(days=1)
+    while dt.weekday() == 6:  # domingo
+        dt = dt + timedelta(days=1)
+    return dt
+
+
+def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
+    if pd.isna(dt):
+        return pd.NaT
+
+    start_t = time(start_hour, 0)
+    end_t = time(end_hour, 0)
+
+    # Domingo -> lunes 09:00
+    if dt.weekday() == 6:
+        return (dt + timedelta(days=1)).replace(
+            hour=start_hour, minute=0, second=0, microsecond=0
+        )
+
+    current_t = dt.time()
+
+    # Antes de apertura
+    if current_t < start_t:
+        return dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+
+    # Dentro de horario
+    if start_t <= current_t <= end_t:
+        return dt
+
+    # Después de cierre
+    return next_open_day(dt).replace(
+        hour=start_hour, minute=0, second=0, microsecond=0
+    )
+
+
+def add_hours_and_normalize(dt, hours_to_add, start_hour=9, end_hour=18):
+    target = dt + timedelta(hours=hours_to_add)
+    return normalize_to_callcenter_open(target, start_hour=start_hour, end_hour=end_hour)
+
+
 def get_next(df, start_time, activity_group):
     x = df[
         (df["activity_group"] == activity_group)
@@ -56,6 +101,9 @@ def evaluate_lead_sequence_only(group):
     result = {
         "lead_id": group["lead_id"].iloc[0],
         "agent": group["agent"].iloc[0],
+        "lead_created_at": group["lead_created_at"].iloc[0],
+        "normalized_created_at": group["normalized_created_at"].iloc[0],
+        "was_normalized": bool(group["was_normalized"].iloc[0]),
         "call_1_ok": False,
         "whatsapp_1_ok": False,
         "call_2_ok": False,
@@ -80,10 +128,10 @@ def evaluate_lead_sequence_only(group):
     ]
 
     idx = 0
-    for a in activities:
+    for activity in activities:
         if idx >= len(expected):
             break
-        if a == expected[idx]:
+        if activity == expected[idx]:
             result[keys[idx]] = True
             idx += 1
 
@@ -92,15 +140,18 @@ def evaluate_lead_sequence_only(group):
     if result["full_flow_ok"]:
         result["fail_step"] = "Cumple todo"
     else:
-        for k, label in zip(keys, [
-            "Sin llamada 1",
-            "Sin WhatsApp 1",
-            "Sin llamada 2",
-            "Sin llamada 3",
-            "Sin WhatsApp 2",
-            "Sin llamada 4",
-            "Sin WhatsApp 3",
-        ]):
+        for k, label in zip(
+            keys,
+            [
+                "Sin llamada 1",
+                "Sin WhatsApp 1",
+                "Sin llamada 2",
+                "Sin llamada 3",
+                "Sin WhatsApp 2",
+                "Sin llamada 4",
+                "Sin WhatsApp 3",
+            ],
+        ):
             if not result[k]:
                 result["fail_step"] = label
                 break
@@ -108,20 +159,17 @@ def evaluate_lead_sequence_only(group):
     return result
 
 
-def in_window(value, target, tolerance):
-    return (target - tolerance) <= value <= (target + tolerance)
-
-
-def evaluate_lead_with_time(group, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
+def evaluate_lead_with_time(group):
     group = group.sort_values("activity_completed_at").copy()
 
-    lead_id = group["lead_id"].iloc[0]
-    agent = group["agent"].iloc[0]
-    created_at = group["lead_created_at"].iloc[0]
+    created_at = group["normalized_created_at"].iloc[0]
 
     result = {
-        "lead_id": lead_id,
-        "agent": agent,
+        "lead_id": group["lead_id"].iloc[0],
+        "agent": group["agent"].iloc[0],
+        "lead_created_at": group["lead_created_at"].iloc[0],
+        "normalized_created_at": created_at,
+        "was_normalized": bool(group["was_normalized"].iloc[0]),
         "call_1_ok": False,
         "whatsapp_1_ok": False,
         "call_2_ok": False,
@@ -131,69 +179,98 @@ def evaluate_lead_with_time(group, immediate_max_min, tol_90_min, tol_half_day_h
         "whatsapp_3_ok": False,
         "full_flow_ok": False,
         "fail_step": "",
+        "call_1_at": pd.NaT,
+        "whatsapp_1_at": pd.NaT,
+        "call_2_at": pd.NaT,
+        "call_3_at": pd.NaT,
+        "whatsapp_2_at": pd.NaT,
+        "call_4_at": pd.NaT,
+        "whatsapp_3_at": pd.NaT,
+        "target_call_2_at": pd.NaT,
+        "target_call_3_at": pd.NaT,
+        "target_call_4_at": pd.NaT,
     }
 
+    # 1) Llamada 1: primera llamada tras creación normalizada
     call_1 = get_next(group, created_at, "call")
     if call_1 is None:
         result["fail_step"] = "Sin llamada 1"
         return result
-    if minutes_between(created_at, call_1["activity_completed_at"]) > 5:
-        result["fail_step"] = "Llamada 1 fuera de 5 min"
-        return result
+
+    result["call_1_at"] = call_1["activity_completed_at"]
     result["call_1_ok"] = True
 
+    # 2) WhatsApp 1: siguiente whatsapp después de llamada 1
     w1 = get_next(group, call_1["activity_completed_at"], "whatsapp")
     if w1 is None:
         result["fail_step"] = "Sin WhatsApp 1"
         return result
-    if not (0 <= minutes_between(call_1["activity_completed_at"], w1["activity_completed_at"]) <= immediate_max_min):
-        result["fail_step"] = "WhatsApp 1 no inmediato"
-        return result
+
+    result["whatsapp_1_at"] = w1["activity_completed_at"]
     result["whatsapp_1_ok"] = True
 
-    c2 = get_next(group, w1["activity_completed_at"], "call")
+    # 3) Llamada 2: después de 90 min o más
+    target_call_2 = call_1["activity_completed_at"] + timedelta(minutes=90)
+    result["target_call_2_at"] = target_call_2
+
+    c2 = get_next(group, target_call_2, "call")
     if c2 is None:
         result["fail_step"] = "Sin llamada 2"
         return result
-    if not in_window(minutes_between(w1["activity_completed_at"], c2["activity_completed_at"]), 90, tol_90_min):
-        result["fail_step"] = "Llamada 2 fuera de ventana"
-        return result
+
+    result["call_2_at"] = c2["activity_completed_at"]
     result["call_2_ok"] = True
 
-    c3 = get_next(group, c2["activity_completed_at"], "call")
+    # 4) Llamada 3: 12 horas después, normalizado a horario call center
+    target_call_3 = add_hours_and_normalize(
+        c2["activity_completed_at"],
+        12,
+        start_hour=CALL_START_HOUR,
+        end_hour=CALL_END_HOUR,
+    )
+    result["target_call_3_at"] = target_call_3
+
+    c3 = get_next(group, target_call_3, "call")
     if c3 is None:
         result["fail_step"] = "Sin llamada 3"
         return result
-    if not in_window(hours_between(c2["activity_completed_at"], c3["activity_completed_at"]), 12, tol_half_day_h):
-        result["fail_step"] = "Llamada 3 fuera de ventana"
-        return result
+
+    result["call_3_at"] = c3["activity_completed_at"]
     result["call_3_ok"] = True
 
+    # 5) WhatsApp 2: siguiente whatsapp tras llamada 3
     w2 = get_next(group, c3["activity_completed_at"], "whatsapp")
     if w2 is None:
         result["fail_step"] = "Sin WhatsApp 2"
         return result
-    if not (0 <= minutes_between(c3["activity_completed_at"], w2["activity_completed_at"]) <= immediate_max_min):
-        result["fail_step"] = "WhatsApp 2 no inmediato"
-        return result
+
+    result["whatsapp_2_at"] = w2["activity_completed_at"]
     result["whatsapp_2_ok"] = True
 
-    c4 = get_next(group, w2["activity_completed_at"], "call")
+    # 6) Llamada 4: 36 horas después, normalizado a horario call center
+    target_call_4 = add_hours_and_normalize(
+        w2["activity_completed_at"],
+        36,
+        start_hour=CALL_START_HOUR,
+        end_hour=CALL_END_HOUR,
+    )
+    result["target_call_4_at"] = target_call_4
+
+    c4 = get_next(group, target_call_4, "call")
     if c4 is None:
         result["fail_step"] = "Sin llamada 4"
         return result
-    if not in_window(hours_between(w2["activity_completed_at"], c4["activity_completed_at"]), 36, tol_day_half_h):
-        result["fail_step"] = "Llamada 4 fuera de ventana"
-        return result
+
+    result["call_4_at"] = c4["activity_completed_at"]
     result["call_4_ok"] = True
 
+    # 7) WhatsApp 3: siguiente whatsapp tras llamada 4
     w3 = get_next(group, c4["activity_completed_at"], "whatsapp")
     if w3 is None:
         result["fail_step"] = "Sin WhatsApp 3"
         return result
-    if not (0 <= minutes_between(c4["activity_completed_at"], w3["activity_completed_at"]) <= immediate_max_min):
-        result["fail_step"] = "WhatsApp 3 no inmediato"
-        return result
+
+    result["whatsapp_3_at"] = w3["activity_completed_at"]
     result["whatsapp_3_ok"] = True
 
     result["full_flow_ok"] = True
@@ -201,21 +278,62 @@ def evaluate_lead_with_time(group, immediate_max_min, tol_90_min, tol_half_day_h
     return result
 
 
-def build_results(df, mode, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
+@st.cache_data
+def load_data(uploaded_file):
+    raw = pd.read_excel(uploaded_file)
+
+    required_cols = [
+        "Negocio - ID",
+        "Negocio - Negocio creado el",
+        "Actividad - Hora en que se marcó como completada",
+        "Negocio - Propietario",
+        "Actividad - Tipo",
+    ]
+
+    missing = [c for c in required_cols if c not in raw.columns]
+    if missing:
+        raise ValueError("Faltan columnas: " + ", ".join(missing))
+
+    df = raw.rename(
+        columns={
+            "Negocio - ID": "lead_id",
+            "Negocio - Negocio creado el": "lead_created_at",
+            "Actividad - Hora en que se marcó como completada": "activity_completed_at",
+            "Negocio - Propietario": "agent",
+            "Actividad - Tipo": "activity_type",
+        }
+    ).copy()
+
+    df["lead_id"] = df["lead_id"].astype(str).str.strip()
+    df["agent"] = df["agent"].astype(str).str.strip()
+    df["lead_created_at"] = pd.to_datetime(df["lead_created_at"], errors="coerce")
+    df["activity_completed_at"] = pd.to_datetime(df["activity_completed_at"], errors="coerce")
+    df["activity_group"] = df["activity_type"].apply(classify_activity)
+
+    df = df.dropna(subset=["lead_id", "lead_created_at", "activity_completed_at", "agent"])
+    df = df[df["activity_group"].isin(["call", "whatsapp"])].copy()
+
+    df["normalized_created_at"] = df["lead_created_at"].apply(
+        lambda x: normalize_to_callcenter_open(
+            x,
+            start_hour=CALL_START_HOUR,
+            end_hour=CALL_END_HOUR,
+        )
+    )
+    df["was_normalized"] = df["normalized_created_at"] != df["lead_created_at"]
+
+    df = df.sort_values(["lead_id", "activity_completed_at"])
+    return df
+
+
+@st.cache_data
+def build_results(df, mode):
     rows = []
     for _, group in df.groupby("lead_id", sort=False):
         if mode == "Solo secuencia":
             rows.append(evaluate_lead_sequence_only(group))
         else:
-            rows.append(
-                evaluate_lead_with_time(
-                    group,
-                    immediate_max_min,
-                    tol_90_min,
-                    tol_half_day_h,
-                    tol_day_half_h,
-                )
-            )
+            rows.append(evaluate_lead_with_time(group))
     return pd.DataFrame(rows)
 
 
@@ -245,60 +363,37 @@ st.title("📞 Flujo de tratamiento de leads perdidos")
 with st.sidebar:
     st.header("Configuración")
     mode = st.radio("Modo de validación", ["Solo secuencia", "Secuencia + tiempos"])
-    immediate_max_min = st.number_input("WhatsApp inmediato (máx. min)", 0, 60, 10, 1)
-    tol_90_min = st.number_input("Tolerancia llamada 2 (min)", 0, 180, 30, 5)
-    tol_half_day_h = st.number_input("Tolerancia llamada 3 (horas)", 0, 24, 4, 1)
-    tol_day_half_h = st.number_input("Tolerancia llamada 4 (horas)", 0, 48, 8, 1)
 
 uploaded_file = st.file_uploader("Sube el Excel de actividades", type=["xlsx"])
 
 if not uploaded_file:
+    st.info("Sube el Excel para analizar los leads.")
     st.stop()
 
-raw = pd.read_excel(uploaded_file)
-
-required_cols = [
-    "Negocio - ID",
-    "Negocio - Negocio creado el",
-    "Actividad - Hora en que se marcó como completada",
-    "Negocio - Propietario",
-    "Actividad - Tipo",
-]
-
-missing = [c for c in required_cols if c not in raw.columns]
-if missing:
-    st.error("Faltan columnas: " + ", ".join(missing))
+try:
+    df = load_data(uploaded_file)
+except Exception as exc:
+    st.error(str(exc))
     st.stop()
 
-df = raw.rename(columns={
-    "Negocio - ID": "lead_id",
-    "Negocio - Negocio creado el": "lead_created_at",
-    "Actividad - Hora en que se marcó como completada": "activity_completed_at",
-    "Negocio - Propietario": "agent",
-    "Actividad - Tipo": "activity_type",
-}).copy()
-
-df["lead_id"] = df["lead_id"].astype(str).str.strip()
-df["agent"] = df["agent"].astype(str).str.strip()
-df["lead_created_at"] = pd.to_datetime(df["lead_created_at"], errors="coerce")
-df["activity_completed_at"] = pd.to_datetime(df["activity_completed_at"], errors="coerce")
-df["activity_group"] = df["activity_type"].apply(classify_activity)
-
-df = df.dropna(subset=["lead_id", "lead_created_at", "activity_completed_at", "agent"])
-df = df[df["activity_group"].isin(["call", "whatsapp"])].copy()
-df = df.sort_values(["lead_id", "activity_completed_at"])
-
-results = build_results(df, mode, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h)
+results = build_results(df, mode)
 
 agents = sorted(results["agent"].dropna().unique().tolist())
 selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
 view = results if selected_agent == "Todos" else results[results["agent"] == selected_agent].copy()
 
-c1, c2, c3 = st.columns(3)
+if view.empty:
+    st.warning("No hay leads para el filtro seleccionado.")
+    st.stop()
+
+normalized_pct = round(view["was_normalized"].mean() * 100, 1) if len(view) else 0.0
+
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Leads analizados", len(view))
 c2.metric("Cumplen flujo completo", f"{pct(view['full_flow_ok']):.1f}%")
-c3.metric("Modo", mode)
+c3.metric("Leads normalizados", f"{normalized_pct:.1f}%")
+c4.metric("Modo", mode)
 
 metrics = {
     "Llamada 1": pct(view["call_1_ok"]),
@@ -315,13 +410,13 @@ st.subheader("Flujo esperado")
 
 r1 = st.columns([1, 1, 1, 1])
 with r1[0]:
-    card("Llamada 1", f"{metrics['Llamada 1']:.1f}%", "desde creación")
+    card("Llamada 1", f"{metrics['Llamada 1']:.1f}%", "tras creación")
 with r1[1]:
-    card("Llamada 2", f"{metrics['Llamada 2']:.1f}%", "tras WhatsApp 1")
+    card("Llamada 2", f"{metrics['Llamada 2']:.1f}%", "después de 90 min")
 with r1[2]:
-    card("Llamada 3", f"{metrics['Llamada 3']:.1f}%", "tras llamada 2")
+    card("Llamada 3", f"{metrics['Llamada 3']:.1f}%", "después de 12 h")
 with r1[3]:
-    card("Llamada 4", f"{metrics['Llamada 4']:.1f}%", "tras WhatsApp 2")
+    card("Llamada 4", f"{metrics['Llamada 4']:.1f}%", "después de 1,5 días")
 
 r2 = st.columns([1, 1, 1, 1])
 with r2[0]:
@@ -341,6 +436,7 @@ summary = (
     results.groupby("agent")
     .agg(
         leads=("lead_id", "nunique"),
+        leads_normalizados=("was_normalized", lambda s: round(s.mean() * 100, 1)),
         llamada_1=("call_1_ok", lambda s: round(s.mean() * 100, 1)),
         whatsapp_1=("whatsapp_1_ok", lambda s: round(s.mean() * 100, 1)),
         llamada_2=("call_2_ok", lambda s: round(s.mean() * 100, 1)),
@@ -363,3 +459,33 @@ fails = (
     .sort_values("num_leads", ascending=False)
 )
 st.dataframe(fails, use_container_width=True, hide_index=True)
+
+st.subheader("Detalle de leads")
+detail_cols = [
+    "lead_id",
+    "agent",
+    "lead_created_at",
+    "normalized_created_at",
+    "was_normalized",
+    "call_1_ok",
+    "whatsapp_1_ok",
+    "call_2_ok",
+    "call_3_ok",
+    "whatsapp_2_ok",
+    "call_4_ok",
+    "whatsapp_3_ok",
+    "full_flow_ok",
+    "fail_step",
+    "call_1_at",
+    "whatsapp_1_at",
+    "call_2_at",
+    "target_call_2_at",
+    "call_3_at",
+    "target_call_3_at",
+    "whatsapp_2_at",
+    "call_4_at",
+    "target_call_4_at",
+    "whatsapp_3_at",
+]
+existing_cols = [c for c in detail_cols if c in view.columns]
+st.dataframe(view[existing_cols], use_container_width=True, hide_index=True)
