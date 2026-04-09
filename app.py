@@ -297,6 +297,13 @@ agents = sorted(milestones["agent"].dropna().unique().tolist())
 selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
 view = milestones if selected_agent == "Todos" else milestones[milestones["agent"] == selected_agent].copy()
+view["call_1_within_limit"] = view["has_call_1"] & (view["call_1_delay_min"] <= max_call_1_min)
+view["wpp_1_within_limit"] = view["has_wpp_1"] & (view["wpp_1_delay_min"] <= max_wpp_1_min)
+view["call_2_within_limit"] = view["has_call_2"] & (view["call_2_delay_h"] <= max_call_2_h)
+view["call_3_within_limit"] = view["has_call_3"] & (view["call_3_delay_h"] <= max_call_3_h)
+view["wpp_2_within_limit"] = view["has_wpp_2"] & (view["wpp_2_delay_min"] <= max_wpp_2_min)
+view["call_4_within_limit"] = view["has_call_4"] & (view["call_4_delay_h"] <= max_call_4_h)
+view["wpp_3_within_limit"] = view["has_wpp_3"] & (view["wpp_3_delay_min"] <= max_wpp_3_min)
 
 if view.empty:
     st.warning("No hay leads para el filtro seleccionado.")
@@ -310,7 +317,7 @@ c2.metric("Leads normalizados", f"{normalized_pct:.1f}%")
 c3.metric("Agente", selected_agent)
 
 # NIVEL 1: flujo completo
-metrics = {
+flow_metrics = {
     "Llamada 1": pct(view["has_call_1"]),
     "WhatsApp 1": pct(view["has_wpp_1"]),
     "Llamada 2": pct(view["has_call_2"]),
@@ -318,6 +325,16 @@ metrics = {
     "WhatsApp 2": pct(view["has_wpp_2"]),
     "Llamada 4": pct(view["has_call_4"]),
     "WhatsApp 3": pct(view["has_wpp_3"]),
+}
+
+limit_metrics = {
+    "Llamada 1": pct(view["call_1_within_limit"]),
+    "WhatsApp 1": pct(view["wpp_1_within_limit"]),
+    "Llamada 2": pct(view["call_2_within_limit"]),
+    "Llamada 3": pct(view["call_3_within_limit"]),
+    "WhatsApp 2": pct(view["wpp_2_within_limit"]),
+    "Llamada 4": pct(view["call_4_within_limit"]),
+    "WhatsApp 3": pct(view["wpp_3_within_limit"]),
 }
 
 st.subheader("Flujo completo alcanzado")
@@ -342,8 +359,26 @@ with r2[2]:
 with r2[3]:
     card("WhatsApp 3", f"{metrics['WhatsApp 3']:.1f}%", "del total de leads")
 
-st.subheader("Cumplimiento de tiempo sobre los leads que sí llegaron al paso")
+st.subheader("Flujo alcanzado")
+r1 = st.columns([1, 1, 1, 1])
+with r1[0]:
+    card("Llamada 1", f"{flow_metrics['Llamada 1']:.1f}%", "del total de leads")
+with r1[1]:
+    card("Llamada 2", f"{flow_metrics['Llamada 2']:.1f}%", "del total de leads")
+with r1[2]:
+    card("Llamada 3", f"{flow_metrics['Llamada 3']:.1f}%", "del total de leads")
+with r1[3]:
+    card("Llamada 4", f"{flow_metrics['Llamada 4']:.1f}%", "del total de leads")
 
+r2 = st.columns([1, 1, 1, 1])
+with r2[0]:
+    card("WhatsApp 1", f"{flow_metrics['WhatsApp 1']:.1f}%", "del total de leads")
+with r2[1]:
+    st.write("")
+with r2[2]:
+    card("WhatsApp 2", f"{flow_metrics['WhatsApp 2']:.1f}%", "del total de leads")
+with r2[3]:
+    card("WhatsApp 3", f"{flow_metrics['WhatsApp 3']:.1f}%", "del total de leads")
 time_rows = []
 
 def add_time_row(step_name, exists_col, delay_col, limit_value, unit):
