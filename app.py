@@ -92,7 +92,6 @@ def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
     start_t = time(start_hour, 0)
     end_t = time(end_hour, 0)
 
-    # Domingo -> lunes 09:00
     if dt.weekday() == 6:
         return (dt + timedelta(days=1)).replace(
             hour=start_hour, minute=0, second=0, microsecond=0
@@ -100,15 +99,12 @@ def normalize_to_callcenter_open(dt, start_hour=9, end_hour=18):
 
     current_t = dt.time()
 
-    # Antes de apertura
     if current_t < start_t:
         return dt.replace(hour=start_hour, minute=0, second=0, microsecond=0)
 
-    # Dentro de horario
     if start_t <= current_t <= end_t:
         return dt
 
-    # Despues de cierre
     return next_open_day(dt).replace(
         hour=start_hour, minute=0, second=0, microsecond=0
     )
@@ -152,7 +148,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
     calls = group[group["activity_group"] == "call"].sort_values("activity_completed_at")
     wpps = group[group["activity_group"] == "whatsapp"].sort_values("activity_completed_at")
 
-    # 1) Llamada 1
     call_1 = calls[calls["activity_completed_at"] >= result["normalized_created_at"]]
     if not call_1.empty:
         result["call_1_at"] = call_1.iloc[0]["activity_completed_at"]
@@ -161,7 +156,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
             minutes_between(result["normalized_created_at"], result["call_1_at"]), 2
         )
 
-    # 2) WhatsApp 1
     if result["has_call_1"]:
         wpp_1 = wpps[wpps["activity_completed_at"] > result["call_1_at"]]
         if not wpp_1.empty:
@@ -171,7 +165,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_1_at"], result["wpp_1_at"]), 2
             )
 
-    # 3) Llamada 2
     if result["has_call_1"]:
         call_2 = calls[calls["activity_completed_at"] > result["call_1_at"]]
         if not call_2.empty:
@@ -183,7 +176,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_2_at"]), 2
             )
 
-    # 4) Llamada 3
     if result["has_call_2"]:
         call_3 = calls[calls["activity_completed_at"] > result["call_2_at"]]
         if not call_3.empty:
@@ -193,7 +185,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(result["call_2_at"], result["call_3_at"]), 2
             )
 
-    # 5) WhatsApp 2
     if result["has_call_3"]:
         wpp_2 = wpps[wpps["activity_completed_at"] > result["call_3_at"]]
         if not wpp_2.empty:
@@ -203,7 +194,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 minutes_between(result["call_3_at"], result["wpp_2_at"]), 2
             )
 
-    # 6) Llamada 4
     if result["has_call_3"]:
         call_4 = calls[calls["activity_completed_at"] > result["call_3_at"]]
         if not call_4.empty:
@@ -215,7 +205,6 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
                 hours_between(base_time, result["call_4_at"]), 2
             )
 
-    # 7) WhatsApp 3
     if result["has_call_4"]:
         wpp_3 = wpps[wpps["activity_completed_at"] > result["call_4_at"]]
         if not wpp_3.empty:
@@ -283,9 +272,6 @@ def resolve_completed_column(columns):
 
 
 def compute_flow_usage_score(df: pd.DataFrame) -> pd.Series:
-    """
-    % de pasos del flujo completados sobre 7 pasos posibles.
-    """
     step_cols = [
         "has_call_1",
         "has_wpp_1",
@@ -556,13 +542,6 @@ if page == "Resumen / resultados":
             leads=("lead_id", "nunique"),
             uso_flujo_pct=("flow_usage_pct", "mean"),
             calidad_flujo_pct=("flow_quality_pct", "mean"),
-            llamada_1=("has_call_1", lambda s: round(s.mean() * 100, 1)),
-            llamada_2=("has_call_2", lambda s: round(s.mean() * 100, 1)),
-            llamada_3=("has_call_3", lambda s: round(s.mean() * 100, 1)),
-            llamada_4=("has_call_4", lambda s: round(s.mean() * 100, 1)),
-            whatsapp_1=("has_wpp_1", lambda s: round(s.mean() * 100, 1)),
-            whatsapp_2=("has_wpp_2", lambda s: round(s.mean() * 100, 1)),
-            whatsapp_3=("has_wpp_3", lambda s: round(s.mean() * 100, 1)),
         )
         .reset_index()
     )
@@ -652,7 +631,26 @@ if page == "Uso de carrusel telefonico":
     agents = sorted(carrousel_df["agent"].dropna().unique().tolist())
     selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
-    view = carrousel_df if selected_agent == "Todos" else carrousel_df[carrousel_df["agent"] == selected_agent].copy()
+    # NUEVO FILTRO POR ESTADO DEL CARRUSEL
+    carrousel_status_options = [
+        "Todos",
+        "Uso ideal",
+        "Uso parcial",
+        "Incorrecto",
+        "Sin llamadas",
+    ]
+    selected_carrousel_status = st.selectbox(
+        "Filtrar por uso de carrusel",
+        carrousel_status_options
+    )
+
+    view = carrousel_df.copy()
+
+    if selected_agent != "Todos":
+        view = view[view["agent"] == selected_agent].copy()
+
+    if selected_carrousel_status != "Todos":
+        view = view[view["carrousel_status"] == selected_carrousel_status].copy()
 
     if view.empty:
         st.warning("No hay leads para el filtro seleccionado.")
@@ -667,7 +665,7 @@ if page == "Uso de carrusel telefonico":
 
     st.subheader("Resumen por agente")
     summary_carrousel = (
-        carrousel_df.groupby("agent")
+        view.groupby("agent")
         .agg(
             leads=("lead_id", "nunique"),
             llamadas_con_numero=("num_calls_with_phone", "mean"),
