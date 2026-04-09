@@ -411,18 +411,20 @@ c5.metric(
 
     st.subheader("Resumen por agente")
     summary = (
-        carrousel_df.groupby("agent")
-        .agg(
-            leads=("lead_id", "nunique"),
-            llamadas_con_numero=("num_calls_with_phone", "mean"),
-            telefonos_unicos=("unique_origin_phones", "mean"),
-            uso_ideal=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
-            uso_parcial=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
-            mal_uso=("carrousel_status", lambda s: round((s == "No usa bien carrusel").mean() * 100, 1)),
-        )
-        .reset_index()
-        .sort_values("mal_uso", ascending=False)
+    carrousel_df.groupby("agent")
+    .agg(
+        leads=("lead_id", "nunique"),
+        llamadas_con_numero=("num_calls_with_phone", "mean"),
+        telefonos_unicos=("unique_origin_phones", "mean"),
+        telefonos_esperados=("expected_unique_phones", "mean"),
+        uso_ideal=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
+        uso_parcial=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
+        incorrecto=("carrousel_status", lambda s: round((s == "Incorrecto").mean() * 100, 1)),
+        sin_llamadas=("carrousel_status", lambda s: round((s == "Sin llamadas").mean() * 100, 1)),
     )
+    .reset_index()
+    .sort_values("incorrecto", ascending=False)
+)
     st.dataframe(summary, use_container_width=True, hide_index=True)
     st.subheader("Distribución de estados")
 status_dist = (
