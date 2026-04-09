@@ -3,10 +3,6 @@ import pandas as pd
 
 st.set_page_config(page_title="Flujo de Leads Perdidos", layout="wide")
 
-# =========================
-# Configuración / helpers
-# =========================
-
 CALL_TYPES = {
     "Lead pendiente de llamar",
     "Llamada informativa",
@@ -19,18 +15,18 @@ WHATSAPP_TYPES = {
 }
 
 
-def classify_activity(value: str) -> str:
+def classify_activity(value):
     if pd.isna(value):
         return "other"
     value = str(value).strip()
-    if value in WHATSAPP_TYPES:
-        return "whatsapp"
     if value in CALL_TYPES:
         return "call"
+    if value in WHATSAPP_TYPES:
+        return "whatsapp"
     return "other"
 
 
-def mins_between(a, b):
+def minutes_between(a, b):
     return (b - a).total_seconds() / 60.0
 
 
@@ -38,31 +34,28 @@ def hours_between(a, b):
     return (b - a).total_seconds() / 3600.0
 
 
-def find_next_activity(df, start_time, activity_group):
-    subset = df[
+def pct(s):
+    if len(s) == 0:
+        return 0.0
+    return round(s.mean() * 100, 1)
+
+
+def get_next(df, start_time, activity_group):
+    x = df[
         (df["activity_group"] == activity_group)
         & (df["activity_completed_at"] >= start_time)
     ].sort_values("activity_completed_at")
-    if subset.empty:
+    if x.empty:
         return None
-    return subset.iloc[0]
+    return x.iloc[0]
 
 
-def in_window(value, target, tolerance):
-    return (target - tolerance) <= value <= (target + tolerance)
-
-
-def evaluate_lead(group, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
+def evaluate_lead_sequence_only(group):
     group = group.sort_values("activity_completed_at").copy()
 
-    lead_id = group["lead_id"].iloc[0]
-    agent = group["agent"].iloc[0]
-    created_at = group["lead_created_at"].iloc[0]
-
     result = {
-        "lead_id": lead_id,
-        "agent": agent,
-        "lead_created_at": created_at,
+        "lead_id": group["lead_id"].iloc[0],
+        "agent": group["agent"].iloc[0],
         "call_1_ok": False,
         "whatsapp_1_ok": False,
         "call_2_ok": False,
@@ -72,272 +65,197 @@ def evaluate_lead(group, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_
         "whatsapp_3_ok": False,
         "full_flow_ok": False,
         "fail_step": "",
-        "call_1_at": pd.NaT,
-        "whatsapp_1_at": pd.NaT,
-        "call_2_at": pd.NaT,
-        "call_3_at": pd.NaT,
-        "whatsapp_2_at": pd.NaT,
-        "call_4_at": pd.NaT,
-        "whatsapp_3_at": pd.NaT,
     }
 
-    # 1) Llamada 1 dentro de 5 min desde creación
-    first_call = find_next_activity(group, created_at, "call")
-    if first_call is None:
+    activities = group["activity_group"].tolist()
+    expected = ["call", "whatsapp", "call", "call", "whatsapp", "call", "whatsapp"]
+    keys = [
+        "call_1_ok",
+        "whatsapp_1_ok",
+        "call_2_ok",
+        "call_3_ok",
+        "whatsapp_2_ok",
+        "call_4_ok",
+        "whatsapp_3_ok",
+    ]
+
+    idx = 0
+    for a in activities:
+        if idx >= len(expected):
+            break
+        if a == expected[idx]:
+            result[keys[idx]] = True
+            idx += 1
+
+    result["full_flow_ok"] = all(result[k] for k in keys)
+
+    if result["full_flow_ok"]:
+        result["fail_step"] = "Cumple todo"
+    else:
+        for k, label in zip(keys, [
+            "Sin llamada 1",
+            "Sin WhatsApp 1",
+            "Sin llamada 2",
+            "Sin llamada 3",
+            "Sin WhatsApp 2",
+            "Sin llamada 4",
+            "Sin WhatsApp 3",
+        ]):
+            if not result[k]:
+                result["fail_step"] = label
+                break
+
+    return result
+
+
+def in_window(value, target, tolerance):
+    return (target - tolerance) <= value <= (target + tolerance)
+
+
+def evaluate_lead_with_time(group, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
+    group = group.sort_values("activity_completed_at").copy()
+
+    lead_id = group["lead_id"].iloc[0]
+    agent = group["agent"].iloc[0]
+    created_at = group["lead_created_at"].iloc[0]
+
+    result = {
+        "lead_id": lead_id,
+        "agent": agent,
+        "call_1_ok": False,
+        "whatsapp_1_ok": False,
+        "call_2_ok": False,
+        "call_3_ok": False,
+        "whatsapp_2_ok": False,
+        "call_4_ok": False,
+        "whatsapp_3_ok": False,
+        "full_flow_ok": False,
+        "fail_step": "",
+    }
+
+    call_1 = get_next(group, created_at, "call")
+    if call_1 is None:
         result["fail_step"] = "Sin llamada 1"
         return result
-
-    result["call_1_at"] = first_call["activity_completed_at"]
-    delta_call_1 = mins_between(created_at, first_call["activity_completed_at"])
-    if delta_call_1 <= 5:
-        result["call_1_ok"] = True
-    else:
+    if minutes_between(created_at, call_1["activity_completed_at"]) > 5:
         result["fail_step"] = "Llamada 1 fuera de 5 min"
         return result
+    result["call_1_ok"] = True
 
-    # 2) WhatsApp 1 inmediato tras llamada 1
-    whatsapp_1 = find_next_activity(group, first_call["activity_completed_at"], "whatsapp")
-    if whatsapp_1 is None:
+    w1 = get_next(group, call_1["activity_completed_at"], "whatsapp")
+    if w1 is None:
         result["fail_step"] = "Sin WhatsApp 1"
         return result
-
-    result["whatsapp_1_at"] = whatsapp_1["activity_completed_at"]
-    delta_wpp_1 = mins_between(first_call["activity_completed_at"], whatsapp_1["activity_completed_at"])
-    if 0 <= delta_wpp_1 <= immediate_max_min:
-        result["whatsapp_1_ok"] = True
-    else:
+    if not (0 <= minutes_between(call_1["activity_completed_at"], w1["activity_completed_at"]) <= immediate_max_min):
         result["fail_step"] = "WhatsApp 1 no inmediato"
         return result
+    result["whatsapp_1_ok"] = True
 
-    # 3) Llamada 2 ~ 90 min después de WhatsApp 1
-    call_2 = find_next_activity(group, whatsapp_1["activity_completed_at"], "call")
-    if call_2 is None:
+    c2 = get_next(group, w1["activity_completed_at"], "call")
+    if c2 is None:
         result["fail_step"] = "Sin llamada 2"
         return result
-
-    result["call_2_at"] = call_2["activity_completed_at"]
-    delta_call_2 = mins_between(whatsapp_1["activity_completed_at"], call_2["activity_completed_at"])
-    if in_window(delta_call_2, 90, tol_90_min):
-        result["call_2_ok"] = True
-    else:
-        result["fail_step"] = "Llamada 2 fuera de ventana 90 min"
+    if not in_window(minutes_between(w1["activity_completed_at"], c2["activity_completed_at"]), 90, tol_90_min):
+        result["fail_step"] = "Llamada 2 fuera de ventana"
         return result
+    result["call_2_ok"] = True
 
-    # 4) Llamada 3 ~ 0,5 días después de llamada 2
-    call_3 = find_next_activity(group, call_2["activity_completed_at"], "call")
-    if call_3 is None:
+    c3 = get_next(group, c2["activity_completed_at"], "call")
+    if c3 is None:
         result["fail_step"] = "Sin llamada 3"
         return result
-
-    result["call_3_at"] = call_3["activity_completed_at"]
-    delta_call_3_h = hours_between(call_2["activity_completed_at"], call_3["activity_completed_at"])
-    if in_window(delta_call_3_h, 12, tol_half_day_h):
-        result["call_3_ok"] = True
-    else:
-        result["fail_step"] = "Llamada 3 fuera de ventana 0,5 días"
+    if not in_window(hours_between(c2["activity_completed_at"], c3["activity_completed_at"]), 12, tol_half_day_h):
+        result["fail_step"] = "Llamada 3 fuera de ventana"
         return result
+    result["call_3_ok"] = True
 
-    # 5) WhatsApp 2 inmediato tras llamada 3
-    whatsapp_2 = find_next_activity(group, call_3["activity_completed_at"], "whatsapp")
-    if whatsapp_2 is None:
+    w2 = get_next(group, c3["activity_completed_at"], "whatsapp")
+    if w2 is None:
         result["fail_step"] = "Sin WhatsApp 2"
         return result
-
-    result["whatsapp_2_at"] = whatsapp_2["activity_completed_at"]
-    delta_wpp_2 = mins_between(call_3["activity_completed_at"], whatsapp_2["activity_completed_at"])
-    if 0 <= delta_wpp_2 <= immediate_max_min:
-        result["whatsapp_2_ok"] = True
-    else:
+    if not (0 <= minutes_between(c3["activity_completed_at"], w2["activity_completed_at"]) <= immediate_max_min):
         result["fail_step"] = "WhatsApp 2 no inmediato"
         return result
+    result["whatsapp_2_ok"] = True
 
-    # 6) Llamada 4 ~ 1,5 días después de WhatsApp 2
-    call_4 = find_next_activity(group, whatsapp_2["activity_completed_at"], "call")
-    if call_4 is None:
+    c4 = get_next(group, w2["activity_completed_at"], "call")
+    if c4 is None:
         result["fail_step"] = "Sin llamada 4"
         return result
-
-    result["call_4_at"] = call_4["activity_completed_at"]
-    delta_call_4_h = hours_between(whatsapp_2["activity_completed_at"], call_4["activity_completed_at"])
-    if in_window(delta_call_4_h, 36, tol_day_half_h):
-        result["call_4_ok"] = True
-    else:
-        result["fail_step"] = "Llamada 4 fuera de ventana 1,5 días"
+    if not in_window(hours_between(w2["activity_completed_at"], c4["activity_completed_at"]), 36, tol_day_half_h):
+        result["fail_step"] = "Llamada 4 fuera de ventana"
         return result
+    result["call_4_ok"] = True
 
-    # 7) WhatsApp 3 inmediato tras llamada 4
-    whatsapp_3 = find_next_activity(group, call_4["activity_completed_at"], "whatsapp")
-    if whatsapp_3 is None:
+    w3 = get_next(group, c4["activity_completed_at"], "whatsapp")
+    if w3 is None:
         result["fail_step"] = "Sin WhatsApp 3"
         return result
-
-    result["whatsapp_3_at"] = whatsapp_3["activity_completed_at"]
-    delta_wpp_3 = mins_between(call_4["activity_completed_at"], whatsapp_3["activity_completed_at"])
-    if 0 <= delta_wpp_3 <= immediate_max_min:
-        result["whatsapp_3_ok"] = True
-    else:
+    if not (0 <= minutes_between(c4["activity_completed_at"], w3["activity_completed_at"]) <= immediate_max_min):
         result["fail_step"] = "WhatsApp 3 no inmediato"
         return result
+    result["whatsapp_3_ok"] = True
 
     result["full_flow_ok"] = True
     result["fail_step"] = "Cumple todo"
     return result
 
 
-def build_results(df, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
+def build_results(df, mode, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h):
     rows = []
     for _, group in df.groupby("lead_id", sort=False):
-        rows.append(
-            evaluate_lead(
-                group,
-                immediate_max_min=immediate_max_min,
-                tol_90_min=tol_90_min,
-                tol_half_day_h=tol_half_day_h,
-                tol_day_half_h=tol_day_half_h,
+        if mode == "Solo secuencia":
+            rows.append(evaluate_lead_sequence_only(group))
+        else:
+            rows.append(
+                evaluate_lead_with_time(
+                    group,
+                    immediate_max_min,
+                    tol_90_min,
+                    tol_half_day_h,
+                    tol_day_half_h,
+                )
             )
-        )
     return pd.DataFrame(rows)
 
 
-def pct(series):
-    if len(series) == 0:
-        return 0.0
-    return round(series.mean() * 100, 1)
-
-
-def render_box(label, percentage, subtitle=""):
-    width = max(0, min(100, float(percentage)))
-    return f"""
-    <div style="width:180px;">
-      <div style="
-          border:2px solid #444;
-          border-radius:8px;
-          background:#f5f5f5;
-          height:88px;
-          position:relative;
-          overflow:hidden;
-          box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-      ">
+def card(title, value, subtitle=""):
+    st.markdown(
+        f"""
         <div style="
-            position:absolute;
-            left:0; top:0; bottom:0;
-            width:{width}%;
-            background:#9fd3a8;
-            opacity:0.9;
-        "></div>
-        <div style="
-            position:relative;
-            z-index:2;
-            height:100%;
-            display:flex;
-            flex-direction:column;
-            justify-content:center;
-            align-items:center;
-            font-family: sans-serif;
+            border:1px solid #bbb;
+            border-radius:10px;
+            padding:14px 10px;
             text-align:center;
-            padding:6px;
+            background:#f7f7f7;
+            color:#111;
+            min-height:110px;
         ">
-          <div style="font-size:16px; font-weight:700; color:#222;">{label}</div>
-          <div style="font-size:22px; font-weight:800; color:#111;">{percentage:.1f}%</div>
-          <div style="font-size:11px; color:#555;">{subtitle}</div>
+            <div style="font-size:14px; font-weight:700;">{title}</div>
+            <div style="font-size:28px; font-weight:800; margin-top:8px;">{value}</div>
+            <div style="font-size:12px; color:#555; margin-top:4px;">{subtitle}</div>
         </div>
-      </div>
-    </div>
-    """
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def render_flow(metrics):
-    html = f"""
-    <div style="font-family:sans-serif;">
-      <div style="margin-bottom:8px; font-size:18px; font-weight:700;">Flujo esperado</div>
-      <div style="display:flex; align-items:flex-start; gap:22px; flex-wrap:wrap;">
-        
-        <div style="display:flex; flex-direction:column; gap:18px; align-items:center;">
-          {render_box("Llamada 1", metrics["call_1_ok_pct"], "≤ 5 min desde creación")}
-          {render_box("WhatsApp 1", metrics["whatsapp_1_ok_pct"], "inmediato")}
-        </div>
-
-        <div style="font-size:34px; padding-top:62px;">→</div>
-
-        <div style="display:flex; flex-direction:column; gap:18px; align-items:center; padding-top:0px;">
-          {render_box("Llamada 2", metrics["call_2_ok_pct"], "90 min")}
-        </div>
-
-        <div style="font-size:34px; padding-top:62px;">→</div>
-
-        <div style="display:flex; flex-direction:column; gap:18px; align-items:center;">
-          {render_box("Llamada 3", metrics["call_3_ok_pct"], "0,5 días")}
-          {render_box("WhatsApp 2", metrics["whatsapp_2_ok_pct"], "inmediato")}
-        </div>
-
-        <div style="font-size:34px; padding-top:62px;">→</div>
-
-        <div style="display:flex; flex-direction:column; gap:18px; align-items:center;">
-          {render_box("Llamada 4", metrics["call_4_ok_pct"], "1,5 días")}
-          {render_box("WhatsApp 3", metrics["whatsapp_3_ok_pct"], "inmediato")}
-        </div>
-
-      </div>
-
-      <div style="margin-top:28px; max-width:260px;">
-        {render_box("Cumple flujo completo", metrics["full_flow_ok_pct"], "lead perdido correctamente")}
-      </div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-
-
-# =========================
-# UI
-# =========================
-
-st.title("📞 Control de flujo de leads perdidos")
-st.write(
-    "Sube el Excel de actividades para comprobar, por agente, qué porcentaje de leads perdidos siguió el flujo correcto."
-)
+st.title("📞 Flujo de tratamiento de leads perdidos")
 
 with st.sidebar:
-    st.header("Parámetros")
-    immediate_max_min = st.number_input(
-        "Máximo minutos para considerar WhatsApp inmediato",
-        min_value=0,
-        max_value=60,
-        value=10,
-        step=1,
-    )
-    tol_90_min = st.number_input(
-        "Tolerancia de la llamada 2 (minutos alrededor de 90)",
-        min_value=0,
-        max_value=180,
-        value=30,
-        step=5,
-    )
-    tol_half_day_h = st.number_input(
-        "Tolerancia llamada 3 (horas alrededor de 12)",
-        min_value=0,
-        max_value=24,
-        value=4,
-        step=1,
-    )
-    tol_day_half_h = st.number_input(
-        "Tolerancia llamada 4 (horas alrededor de 36)",
-        min_value=0,
-        max_value=48,
-        value=8,
-        step=1,
-    )
+    st.header("Configuración")
+    mode = st.radio("Modo de validación", ["Solo secuencia", "Secuencia + tiempos"])
+    immediate_max_min = st.number_input("WhatsApp inmediato (máx. min)", 0, 60, 10, 1)
+    tol_90_min = st.number_input("Tolerancia llamada 2 (min)", 0, 180, 30, 5)
+    tol_half_day_h = st.number_input("Tolerancia llamada 3 (horas)", 0, 24, 4, 1)
+    tol_day_half_h = st.number_input("Tolerancia llamada 4 (horas)", 0, 48, 8, 1)
 
-uploaded_file = st.file_uploader("Sube el Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Sube el Excel de actividades", type=["xlsx"])
 
 if not uploaded_file:
-    st.info("Esperando archivo Excel.")
     st.stop()
 
-try:
-    raw = pd.read_excel(uploaded_file)
-except Exception as exc:
-    st.error(f"No se pudo leer el Excel: {exc}")
-    st.stop()
+raw = pd.read_excel(uploaded_file)
 
 required_cols = [
     "Negocio - ID",
@@ -349,7 +267,7 @@ required_cols = [
 
 missing = [c for c in required_cols if c not in raw.columns]
 if missing:
-    st.error("Faltan columnas requeridas: " + ", ".join(missing))
+    st.error("Faltan columnas: " + ", ".join(missing))
     st.stop()
 
 df = raw.rename(columns={
@@ -370,53 +288,57 @@ df = df.dropna(subset=["lead_id", "lead_created_at", "activity_completed_at", "a
 df = df[df["activity_group"].isin(["call", "whatsapp"])].copy()
 df = df.sort_values(["lead_id", "activity_completed_at"])
 
-if df.empty:
-    st.warning("No hay datos válidos tras limpiar el archivo.")
-    st.stop()
-
-results = build_results(
-    df,
-    immediate_max_min=immediate_max_min,
-    tol_90_min=tol_90_min,
-    tol_half_day_h=tol_half_day_h,
-    tol_day_half_h=tol_day_half_h,
-)
+results = build_results(df, mode, immediate_max_min, tol_90_min, tol_half_day_h, tol_day_half_h)
 
 agents = sorted(results["agent"].dropna().unique().tolist())
 selected_agent = st.selectbox("Selecciona agente", ["Todos"] + agents)
 
-view = results.copy()
-if selected_agent != "Todos":
-    view = view[view["agent"] == selected_agent].copy()
-
-if view.empty:
-    st.warning("No hay leads para el filtro seleccionado.")
-    st.stop()
-
-metrics = {
-    "call_1_ok_pct": pct(view["call_1_ok"]),
-    "whatsapp_1_ok_pct": pct(view["whatsapp_1_ok"]),
-    "call_2_ok_pct": pct(view["call_2_ok"]),
-    "call_3_ok_pct": pct(view["call_3_ok"]),
-    "whatsapp_2_ok_pct": pct(view["whatsapp_2_ok"]),
-    "call_4_ok_pct": pct(view["call_4_ok"]),
-    "whatsapp_3_ok_pct": pct(view["whatsapp_3_ok"]),
-    "full_flow_ok_pct": pct(view["full_flow_ok"]),
-}
+view = results if selected_agent == "Todos" else results[results["agent"] == selected_agent].copy()
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Leads analizados", f"{len(view):,}")
-c2.metric("Cumplen flujo completo", f"{metrics['full_flow_ok_pct']:.1f}%")
-c3.metric("Agente", selected_agent)
+c1.metric("Leads analizados", len(view))
+c2.metric("Cumplen flujo completo", f"{pct(view['full_flow_ok']):.1f}%")
+c3.metric("Modo", mode)
 
-st.markdown("---")
-render_flow(metrics)
-st.markdown("---")
+metrics = {
+    "Llamada 1": pct(view["call_1_ok"]),
+    "WhatsApp 1": pct(view["whatsapp_1_ok"]),
+    "Llamada 2": pct(view["call_2_ok"]),
+    "Llamada 3": pct(view["call_3_ok"]),
+    "WhatsApp 2": pct(view["whatsapp_2_ok"]),
+    "Llamada 4": pct(view["call_4_ok"]),
+    "WhatsApp 3": pct(view["whatsapp_3_ok"]),
+    "Flujo completo": pct(view["full_flow_ok"]),
+}
+
+st.subheader("Flujo esperado")
+
+r1 = st.columns([1, 1, 1, 1])
+with r1[0]:
+    card("Llamada 1", f"{metrics['Llamada 1']:.1f}%", "desde creación")
+with r1[1]:
+    card("Llamada 2", f"{metrics['Llamada 2']:.1f}%", "tras WhatsApp 1")
+with r1[2]:
+    card("Llamada 3", f"{metrics['Llamada 3']:.1f}%", "tras llamada 2")
+with r1[3]:
+    card("Llamada 4", f"{metrics['Llamada 4']:.1f}%", "tras WhatsApp 2")
+
+r2 = st.columns([1, 1, 1, 1])
+with r2[0]:
+    card("WhatsApp 1", f"{metrics['WhatsApp 1']:.1f}%", "tras llamada 1")
+with r2[1]:
+    st.write("")
+with r2[2]:
+    card("WhatsApp 2", f"{metrics['WhatsApp 2']:.1f}%", "tras llamada 3")
+with r2[3]:
+    card("WhatsApp 3", f"{metrics['WhatsApp 3']:.1f}%", "tras llamada 4")
+
+st.markdown("### Resultado final")
+card("Cumple flujo completo", f"{metrics['Flujo completo']:.1f}%", "lead perdido correctamente")
 
 st.subheader("Resumen por agente")
-
 summary = (
-    results.groupby("agent", dropna=False)
+    results.groupby("agent")
     .agg(
         leads=("lead_id", "nunique"),
         llamada_1=("call_1_ok", lambda s: round(s.mean() * 100, 1)),
@@ -431,10 +353,9 @@ summary = (
     .reset_index()
     .sort_values("flujo_completo", ascending=False)
 )
-
 st.dataframe(summary, use_container_width=True, hide_index=True)
 
-st.subheader("Dónde fallan los leads")
+st.subheader("Motivo de fallo")
 fails = (
     view.groupby("fail_step")
     .size()
@@ -442,27 +363,3 @@ fails = (
     .sort_values("num_leads", ascending=False)
 )
 st.dataframe(fails, use_container_width=True, hide_index=True)
-
-st.subheader("Detalle de leads")
-detail_cols = [
-    "lead_id",
-    "agent",
-    "lead_created_at",
-    "call_1_ok",
-    "whatsapp_1_ok",
-    "call_2_ok",
-    "call_3_ok",
-    "whatsapp_2_ok",
-    "call_4_ok",
-    "whatsapp_3_ok",
-    "full_flow_ok",
-    "fail_step",
-    "call_1_at",
-    "whatsapp_1_at",
-    "call_2_at",
-    "call_3_at",
-    "whatsapp_2_at",
-    "call_4_at",
-    "whatsapp_3_at",
-]
-st.dataframe(view[detail_cols], use_container_width=True, hide_index=True)
