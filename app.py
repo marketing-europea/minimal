@@ -262,27 +262,36 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     if calls.empty:
         return result
 
-    phones = calls["origin_phone"].tolist()
-    num_calls = len(phones)
-    unique_phones = len(set(phones))
+phones = calls["origin_phone"].tolist()
+num_calls = len(phones)
+unique_phones_total = len(set(phones))
 
-    result["num_calls_with_phone"] = num_calls
-    result["unique_origin_phones"] = unique_phones
-    result["phones_sequence"] = " | ".join(phones)
-    result["has_outbound_call_with_phone"] = True
+result["num_calls_with_phone"] = num_calls
+result["unique_origin_phones"] = unique_phones_total
+result["phones_sequence"] = " | ".join(phones)
+result["has_outbound_call_with_phone"] = True
 
-    expected_unique = min(num_calls, 3)
-    result["expected_unique_phones"] = expected_unique
+# Evaluacion real del carrusel basada en ORDEN
+first_three = phones[:3]
+unique_first_three = len(set(first_three))
+
+    result["expected_unique_phones"] = min(num_calls, 3)
+    result["unique_origin_phones_first_3"] = unique_first_three
 
     if num_calls == 1:
+    result["carrousel_status"] = "Incorrecto"
+            elif num_calls == 2:
+        if len(set(phones[:2])) == 2:
+        result["carrousel_status"] = "Uso ideal"
+        else:
         result["carrousel_status"] = "Incorrecto"
     else:
-        if unique_phones >= expected_unique:
-            result["carrousel_status"] = "Uso ideal"
-        elif unique_phones == expected_unique - 1 and expected_unique >= 3:
-            result["carrousel_status"] = "Uso parcial"
-        else:
-            result["carrousel_status"] = "Incorrecto"
+    if unique_first_three == 3:
+        result["carrousel_status"] = "Uso ideal"
+    elif unique_first_three == 2:
+        result["carrousel_status"] = "Uso parcial"
+    else:
+        result["carrousel_status"] = "Incorrecto"
 
     return result
 
