@@ -254,6 +254,8 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "unique_origin_phones_first_3": 0,
+        "first_3_phones_sequence": "",
         "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
@@ -262,36 +264,37 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     if calls.empty:
         return result
 
-phones = calls["origin_phone"].tolist()
-num_calls = len(phones)
-unique_phones_total = len(set(phones))
+    phones = calls["origin_phone"].tolist()
+    num_calls = len(phones)
+    unique_phones_total = len(set(phones))
 
-result["num_calls_with_phone"] = num_calls
-result["unique_origin_phones"] = unique_phones_total
-result["phones_sequence"] = " | ".join(phones)
-result["has_outbound_call_with_phone"] = True
+    result["num_calls_with_phone"] = num_calls
+    result["unique_origin_phones"] = unique_phones_total
+    result["phones_sequence"] = " | ".join(phones)
+    result["has_outbound_call_with_phone"] = True
 
-# Evaluacion real del carrusel basada en ORDEN
-first_three = phones[:3]
-unique_first_three = len(set(first_three))
+    # Evaluacion real del carrusel basada en ORDEN
+    first_three = phones[:3]
+    unique_first_three = len(set(first_three))
 
     result["expected_unique_phones"] = min(num_calls, 3)
     result["unique_origin_phones_first_3"] = unique_first_three
+    result["first_3_phones_sequence"] = " | ".join(first_three)
 
     if num_calls == 1:
-    result["carrousel_status"] = "Incorrecto"
-            elif num_calls == 2:
+        result["carrousel_status"] = "Incorrecto"
+    elif num_calls == 2:
         if len(set(phones[:2])) == 2:
-        result["carrousel_status"] = "Uso ideal"
+            result["carrousel_status"] = "Uso ideal"
         else:
-        result["carrousel_status"] = "Incorrecto"
+            result["carrousel_status"] = "Incorrecto"
     else:
-    if unique_first_three == 3:
-        result["carrousel_status"] = "Uso ideal"
-    elif unique_first_three == 2:
-        result["carrousel_status"] = "Uso parcial"
-    else:
-        result["carrousel_status"] = "Incorrecto"
+        if unique_first_three == 3:
+            result["carrousel_status"] = "Uso ideal"
+        elif unique_first_three == 2:
+            result["carrousel_status"] = "Uso parcial"
+        else:
+            result["carrousel_status"] = "Incorrecto"
 
     return result
 
@@ -387,7 +390,7 @@ def load_data(uploaded_file):
     df["activity_month"] = df["activity_completed_at"].dt.month
     df["activity_month_name"] = df["activity_month"].map(MONTHS_ES)
 
-    # Solo informativo, por si quieres ver cuándo se creó el lead
+    # Solo informativo
     df["lead_created_year"] = df["lead_created_at"].dt.year
     df["lead_created_month"] = df["lead_created_at"].dt.month
     df["lead_created_month_name"] = df["lead_created_month"].map(MONTHS_ES)
@@ -460,6 +463,8 @@ def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "unique_origin_phones_first_3": 0,
+        "first_3_phones_sequence": "",
         "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
@@ -512,27 +517,13 @@ with st.sidebar:
 
     if page in ["Resumen / resultados", "Flujo de tratamiento"]:
         st.header("Filtros de tiempo")
-        max_call_1_min = st.number_input(
-            "Limite Llamada 1 (min)", min_value=1, max_value=1440, value=5, key="max_call_1_min"
-        )
-        max_wpp_1_min = st.number_input(
-            "Limite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_1_min"
-        )
-        max_call_2_h = st.number_input(
-            "Limite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5, key="max_call_2_h"
-        )
-        max_call_3_h = st.number_input(
-            "Limite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5, key="max_call_3_h"
-        )
-        max_wpp_2_min = st.number_input(
-            "Limite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_2_min"
-        )
-        max_call_4_h = st.number_input(
-            "Limite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5, key="max_call_4_h"
-        )
-        max_wpp_3_min = st.number_input(
-            "Limite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5, key="max_wpp_3_min"
-        )
+        max_call_1_min = st.number_input("Limite Llamada 1 (min)", min_value=1, max_value=1440, value=5)
+        max_wpp_1_min = st.number_input("Limite WhatsApp 1 (min)", min_value=1, max_value=1440, value=5)
+        max_call_2_h = st.number_input("Limite Llamada 2 (h)", min_value=0.0, max_value=240.0, value=4.0, step=0.5)
+        max_call_3_h = st.number_input("Limite Llamada 3 (h)", min_value=0.0, max_value=240.0, value=12.0, step=0.5)
+        max_wpp_2_min = st.number_input("Limite WhatsApp 2 (min)", min_value=1, max_value=1440, value=5)
+        max_call_4_h = st.number_input("Limite Llamada 4 (h)", min_value=0.0, max_value=240.0, value=36.0, step=0.5)
+        max_wpp_3_min = st.number_input("Limite WhatsApp 3 (min)", min_value=1, max_value=1440, value=5)
 
 uploaded_file = st.file_uploader("Sube el Excel de actividades", type=["xlsx"])
 
@@ -554,10 +545,9 @@ available_months = [MONTHS_ES[m] for m in available_months_num]
 
 with st.sidebar:
     st.header("Filtros generales")
-    selected_year = st.selectbox("Año", ["Todos"] + available_years, key="selected_year")
-    selected_month = st.selectbox("Mes", ["Todos"] + available_months, key="selected_month")
+    selected_year = st.selectbox("Año", ["Todos"] + available_years)
+    selected_month = st.selectbox("Mes", ["Todos"] + available_months)
 
-# FILTRAR SIEMPRE PRIMERO EL DATAFRAME DE ACTIVIDADES
 df_filtered = apply_general_filters(df, selected_year, selected_month, month_name_to_num)
 
 # =========================
@@ -712,6 +702,8 @@ if page == "Uso de carrusel telefonico":
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "unique_origin_phones_first_3": 0,
+        "first_3_phones_sequence": "",
         "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
@@ -771,6 +763,7 @@ if page == "Uso de carrusel telefonico":
             llamadas_con_numero=("num_calls_with_phone", "mean"),
             telefonos_unicos=("unique_origin_phones", "mean"),
             telefonos_esperados=("expected_unique_phones", "mean"),
+            telefonos_unicos_primeras_3=("unique_origin_phones_first_3", "mean"),
             uso_ideal=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
             uso_parcial=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
             incorrecto=("carrousel_status", lambda s: round((s == "Incorrecto").mean() * 100, 1)),
@@ -803,8 +796,10 @@ if page == "Uso de carrusel telefonico":
         "num_calls_with_phone",
         "unique_origin_phones",
         "expected_unique_phones",
+        "unique_origin_phones_first_3",
         "has_outbound_call_with_phone",
         "carrousel_status",
+        "first_3_phones_sequence",
         "phones_sequence",
     ]
     available_cols_carrousel = [c for c in detail_cols_carrousel if c in view.columns]
