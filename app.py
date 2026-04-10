@@ -676,20 +676,47 @@ if page == "Resumen / resultados":
             .sort_values(selected_metric_col, ascending=False)
             .set_index("agent")
         )
-        st.bar_chart(chart_carrousel)
-    else:
-        st.info("No hay datos de carrusel para los filtros seleccionados.")
+        import matplotlib.pyplot as plt
 
-    st.subheader("Tabla resumen por agente")
-    final_summary = flow_agent_summary.merge(
-        carrousel_agent_summary,
-        on="agent",
-        how="left"
+st.subheader(
+    f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: {selected_carrousel_status_resumen}"
+)
+
+if not carrousel_agent_summary.empty:
+    chart_carrousel = (
+        carrousel_agent_summary[["agent", selected_metric_col]]
+        .sort_values(selected_metric_col, ascending=False)
+        .reset_index(drop=True)
     )
-    st.dataframe(final_summary, use_container_width=True, hide_index=True)
 
-    st.stop()
+    fig, ax = plt.subplots(figsize=(14, 6))
 
+    bars = ax.bar(
+        chart_carrousel["agent"],
+        chart_carrousel[selected_metric_col]
+    )
+
+    ax.set_ylabel("%")
+    ax.set_xlabel("Agente")
+    ax.set_title(f"Carrusel · {selected_carrousel_status_resumen}")
+    ax.set_ylim(0, max(chart_carrousel[selected_metric_col].max() + 10, 10))
+    plt.xticks(rotation=90)
+
+    # Etiquetas de porcentaje sobre cada barra
+    for bar, value in zip(bars, chart_carrousel[selected_metric_col]):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{value:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            fontweight="bold"
+        )
+
+    st.pyplot(fig)
+else:
+    st.info("No hay datos de carrusel para los filtros seleccionados.")
 # =========================
 # PAGINA CARRUSEL
 # =========================
