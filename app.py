@@ -627,7 +627,8 @@ if page == "Resumen / resultados":
             "cumplimiento_carrusel",
         ])
 
-    metric_col_map = {
+        metric_col_map = {
+        "Cumplimiento carrusel": "cumplimiento_carrusel",
         "Uso ideal": "uso_ideal_carrusel",
         "Uso parcial": "uso_parcial_carrusel",
         "Incorrecto": "incorrecto_carrusel",
