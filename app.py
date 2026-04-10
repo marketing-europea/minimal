@@ -549,10 +549,10 @@ if page == "Resumen / resultados":
     with st.sidebar:
         st.header("Filtros resumen")
         selected_carrousel_status_resumen = st.selectbox(
-            "Estado carrusel para el grafico",
-            ["Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
-            key="selected_carrousel_status_resumen",
-        )
+    "Metrica carrusel para el grafico",
+    ["Cumplimiento carrusel", "Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
+    key="selected_carrousel_status_resumen",
+)
         only_evaluable_resumen = st.checkbox(
             "Solo leads evaluables en carrusel",
             value=True,
