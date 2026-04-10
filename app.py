@@ -326,7 +326,7 @@ def apply_general_filters(df: pd.DataFrame, selected_year, selected_month, month
 
 @st.cache_data
 def load_data(uploaded_file):
-    raw = pd.read_excel(uploaded_file)
+    raw = pd.read_excel(uploaded_file, engine="openpyxl")
 
     completed_col = resolve_completed_column(raw.columns)
 
@@ -549,10 +549,16 @@ if page == "Resumen / resultados":
     with st.sidebar:
         st.header("Filtros resumen")
         selected_carrousel_status_resumen = st.selectbox(
-    "Metrica carrusel para el grafico",
-    ["Cumplimiento carrusel", "Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
-    key="selected_carrousel_status_resumen",
-)
+            "Metrica carrusel para el grafico",
+            [
+                "% de leads que usan el carrusel",
+                "Uso ideal",
+                "Uso parcial",
+                "Incorrecto",
+                "Sin llamadas",
+            ],
+            key="selected_carrousel_status_resumen",
+        )
         only_evaluable_resumen = st.checkbox(
             "Solo leads evaluables en carrusel",
             value=True,
@@ -627,8 +633,8 @@ if page == "Resumen / resultados":
             "cumplimiento_carrusel",
         ])
 
-        metric_col_map = {
-        "Cumplimiento carrusel": "cumplimiento_carrusel",
+    metric_col_map = {
+        "% de leads que usan el carrusel": "cumplimiento_carrusel",
         "Uso ideal": "uso_ideal_carrusel",
         "Uso parcial": "uso_parcial_carrusel",
         "Incorrecto": "incorrecto_carrusel",
@@ -644,7 +650,7 @@ if page == "Resumen / resultados":
         f"{flow_agent_summary['uso_flujo_pct'].mean():.1f}%" if not flow_agent_summary.empty else "0.0%"
     )
     k4.metric(
-        f"Carrusel · {selected_carrousel_status_resumen}",
+        selected_carrousel_status_resumen,
         f"{carrousel_agent_summary[selected_metric_col].mean():.1f}%"
         if not carrousel_agent_summary.empty else "0.0%"
     )
@@ -657,35 +663,45 @@ if page == "Resumen / resultados":
         .reset_index(drop=True)
     )
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    if not chart_flow_use.empty:
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-    bars = ax.bar(
-        chart_flow_use["agent"],
-        chart_flow_use["uso_flujo_pct"]
-    )
-
-    ax.set_ylabel("%")
-    ax.set_xlabel("Agente")
-    ax.set_title("Uso del flujo por agente")
-    ax.set_ylim(0, max(chart_flow_use["uso_flujo_pct"].max() + 10, 10))
-    plt.xticks(rotation=90)
-
-    for bar, value in zip(bars, chart_flow_use["uso_flujo_pct"]):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 1,
-            f"{value:.1f}%",
-            ha="center",
-            va="bottom",
-            fontsize=11,
-            fontweight="bold"
+        bars = ax.bar(
+            chart_flow_use["agent"],
+            chart_flow_use["uso_flujo_pct"]
         )
 
-    st.pyplot(fig)
+        ax.set_ylabel("%")
+        ax.set_xlabel("Agente")
+        ax.set_title("Uso del flujo por agente")
+        ax.set_ylim(0, max(chart_flow_use["uso_flujo_pct"].max() + 10, 10))
+        plt.xticks(rotation=90)
 
-    st.subheader(
-        f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: {selected_carrousel_status_resumen}"
-    )
+        for bar, value in zip(bars, chart_flow_use["uso_flujo_pct"]):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 1,
+                f"{value:.1f}%",
+                ha="center",
+                va="bottom",
+                fontsize=11,
+                fontweight="bold"
+            )
+
+        st.pyplot(fig)
+    else:
+        st.info("No hay datos de flujo para los filtros seleccionados.")
+
+    if selected_carrousel_status_resumen == "% de leads que usan el carrusel":
+        title_graph_2 = "Grafico 2 · Agente por agente · % de leads que usan el carrusel"
+    else:
+        title_graph_2 = (
+            f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: "
+            f"{selected_carrousel_status_resumen}"
+        )
+
+    st.subheader(title_graph_2)
+
     if not carrousel_agent_summary.empty:
         chart_carrousel = (
             carrousel_agent_summary[["agent", selected_metric_col]]
@@ -769,7 +785,10 @@ if page == "Uso de carrusel telefonico":
     c2.metric("Uso ideal", f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%")
     c3.metric("Uso parcial", f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%")
     c4.metric("Incorrecto", f"{round((view['carrousel_status'] == 'Incorrecto').mean() * 100, 1):.1f}%")
-    c5.metric("Cumplimiento", f"{round(((view['carrousel_status'] == 'Uso ideal') | (view['carrousel_status'] == 'Uso parcial')).mean() * 100, 1):.1f}%")
+    c5.metric(
+        "Cumplimiento",
+        f"{round(((view['carrousel_status'] == 'Uso ideal') | (view['carrousel_status'] == 'Uso parcial')).mean() * 100, 1):.1f}%"
+    )
 
     st.subheader("Resumen por agente")
     summary_carrousel = (
@@ -1021,7 +1040,7 @@ st.dataframe(step_detail[available_cols], use_container_width=True, hide_index=T
 
 st.subheader("Resumen por agente")
 summary_flow = (
-    milestones.groupby("agent")
+    view.groupby("agent")
     .agg(
         leads=("lead_id", "nunique"),
         leads_normalizados=("was_normalized", lambda s: round(s.mean() * 100, 1)),
