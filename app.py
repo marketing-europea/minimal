@@ -703,7 +703,7 @@ if page == "Resumen / resultados":
     st.subheader(title_graph_2)
 
     if not carrousel_agent_summary.empty:
-    chart_carrousel = (
+        chart_carrousel = (
         carrousel_agent_summary[["agent", selected_metric_col]]
         .sort_values(selected_metric_col, ascending=False)
         .reset_index(drop=True)
