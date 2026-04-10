@@ -692,7 +692,7 @@ if page == "Resumen / resultados":
     else:
         st.info("No hay datos de flujo para los filtros seleccionados.")
 
-    if selected_carrousel_status_resumen == "% de leads que usan el carrusel":
+        if selected_carrousel_status_resumen == "% de leads que usan el carrusel":
     title_graph_2 = "Grafico 2 · Agente por agente · % de leads que usan el carrusel"
     else:
     title_graph_2 = (
