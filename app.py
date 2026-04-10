@@ -56,9 +56,6 @@ def normalize_text(value):
 def is_outbound_call_subject(subject):
     """
     Detecta si el asunto corresponde a una llamada saliente.
-    Ejemplos:
-    - 'Llamada saliente (...) de +34... a +34...'
-    - 'LLamada saliente (...) de +34...'
     """
     text = normalize_text(subject)
     outbound_patterns = [
@@ -141,9 +138,9 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
         "lead_created_at": group["lead_created_at"].iloc[0],
         "normalized_created_at": group["normalized_created_at"].iloc[0],
         "was_normalized": bool(group["was_normalized"].iloc[0]),
-        "lead_year": group["lead_year"].iloc[0],
-        "lead_month": group["lead_month"].iloc[0],
-        "lead_month_name": group["lead_month_name"].iloc[0],
+        "activity_year": group["activity_year"].iloc[0],
+        "activity_month": group["activity_month"].iloc[0],
+        "activity_month_name": group["activity_month_name"].iloc[0],
         "call_1_at": pd.NaT,
         "wpp_1_at": pd.NaT,
         "call_2_at": pd.NaT,
@@ -251,9 +248,9 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
         "lead_id": group["lead_id"].iloc[0],
         "agent": group["agent"].iloc[0],
         "lead_created_at": group["lead_created_at"].iloc[0],
-        "lead_year": group["lead_year"].iloc[0],
-        "lead_month": group["lead_month"].iloc[0],
-        "lead_month_name": group["lead_month_name"].iloc[0],
+        "activity_year": group["activity_year"].iloc[0],
+        "activity_month": group["activity_month"].iloc[0],
+        "activity_month_name": group["activity_month_name"].iloc[0],
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
@@ -315,11 +312,11 @@ def apply_general_filters(df: pd.DataFrame, selected_year, selected_month, month
     out = df.copy()
 
     if selected_year != "Todos":
-        out = out[out["lead_year"] == selected_year].copy()
+        out = out[out["activity_year"] == selected_year].copy()
 
     if selected_month != "Todos":
         month_num = month_name_to_num[selected_month]
-        out = out[out["lead_month"] == month_num].copy()
+        out = out[out["activity_month"] == month_num].copy()
 
     return out
 
@@ -376,9 +373,15 @@ def load_data(uploaded_file):
     )
     df["was_normalized"] = df["normalized_created_at"] != df["lead_created_at"]
 
-    df["lead_year"] = df["lead_created_at"].dt.year
-    df["lead_month"] = df["lead_created_at"].dt.month
-    df["lead_month_name"] = df["lead_month"].map(MONTHS_ES)
+    # FILTROS Y REPORTING SIEMPRE POR FECHA DE ACTIVIDAD
+    df["activity_year"] = df["activity_completed_at"].dt.year
+    df["activity_month"] = df["activity_completed_at"].dt.month
+    df["activity_month_name"] = df["activity_month"].map(MONTHS_ES)
+
+    # Solo informativo, por si quieres ver cuándo se creó el lead
+    df["lead_created_year"] = df["lead_created_at"].dt.year
+    df["lead_created_month"] = df["lead_created_at"].dt.month
+    df["lead_created_month_name"] = df["lead_created_month"].map(MONTHS_ES)
 
     df = df.sort_values(["lead_id", "activity_completed_at"]).reset_index(drop=True)
     return df
@@ -397,9 +400,9 @@ def build_milestones(df: pd.DataFrame) -> pd.DataFrame:
         "lead_created_at": pd.NaT,
         "normalized_created_at": pd.NaT,
         "was_normalized": False,
-        "lead_year": None,
-        "lead_month": None,
-        "lead_month_name": None,
+        "activity_year": None,
+        "activity_month": None,
+        "activity_month_name": None,
         "call_1_at": pd.NaT,
         "wpp_1_at": pd.NaT,
         "call_2_at": pd.NaT,
@@ -442,9 +445,9 @@ def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
         "lead_id": None,
         "agent": None,
         "lead_created_at": pd.NaT,
-        "lead_year": None,
-        "lead_month": None,
-        "lead_month_name": None,
+        "activity_year": None,
+        "activity_month": None,
+        "activity_month_name": None,
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
@@ -536,8 +539,8 @@ except Exception as exc:
 
 month_name_to_num = {v: k for k, v in MONTHS_ES.items()}
 
-available_years = sorted([int(y) for y in df["lead_year"].dropna().unique().tolist()])
-available_months_num = sorted([int(m) for m in df["lead_month"].dropna().unique().tolist()])
+available_years = sorted([int(y) for y in df["activity_year"].dropna().unique().tolist()])
+available_months_num = sorted([int(m) for m in df["activity_month"].dropna().unique().tolist()])
 available_months = [MONTHS_ES[m] for m in available_months_num]
 
 with st.sidebar:
@@ -545,15 +548,15 @@ with st.sidebar:
     selected_year = st.selectbox("Año", ["Todos"] + available_years, key="selected_year")
     selected_month = st.selectbox("Mes", ["Todos"] + available_months, key="selected_month")
 
+# FILTRAR SIEMPRE PRIMERO EL DATAFRAME DE ACTIVIDADES
+df_filtered = apply_general_filters(df, selected_year, selected_month, month_name_to_num)
+
 # =========================
 # PAGINA RESUMEN / RESULTADOS
 # =========================
 if page == "Resumen / resultados":
-    milestones = build_milestones(df)
-    carrousel_df = build_carrousel_analysis(df)
-
-    milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
-    carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
+    milestones = build_milestones(df_filtered)
+    carrousel_df = build_carrousel_analysis(df_filtered)
 
     with st.sidebar:
         st.header("Filtros resumen")
@@ -692,8 +695,7 @@ if page == "Resumen / resultados":
 # PAGINA CARRUSEL
 # =========================
 if page == "Uso de carrusel telefonico":
-    carrousel_df = build_carrousel_analysis(df)
-    carrousel_df = apply_general_filters(carrousel_df, selected_year, selected_month, month_name_to_num)
+    carrousel_df = build_carrousel_analysis(df_filtered)
 
     for col, default_value in {
         "lead_id": None,
@@ -704,6 +706,8 @@ if page == "Uso de carrusel telefonico":
         "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
+        "activity_year": None,
+        "activity_month_name": None,
     }.items():
         if col not in carrousel_df.columns:
             carrousel_df[col] = default_value
@@ -785,8 +789,8 @@ if page == "Uso de carrusel telefonico":
     detail_cols_carrousel = [
         "lead_id",
         "agent",
-        "lead_year",
-        "lead_month_name",
+        "activity_year",
+        "activity_month_name",
         "num_calls_with_phone",
         "unique_origin_phones",
         "expected_unique_phones",
@@ -801,8 +805,7 @@ if page == "Uso de carrusel telefonico":
 # =========================
 # PAGINA FLUJO
 # =========================
-milestones = build_milestones(df)
-milestones = apply_general_filters(milestones, selected_year, selected_month, month_name_to_num)
+milestones = build_milestones(df_filtered)
 
 agents_flow = sorted(milestones["agent"].dropna().unique().tolist())
 
@@ -971,8 +974,8 @@ st.write(f"Mostrando solo leads que si llegaron a {selected_step.lower()}.")
 detail_cols = [
     "lead_id",
     "agent",
-    "lead_year",
-    "lead_month_name",
+    "activity_year",
+    "activity_month_name",
     "lead_created_at",
     "normalized_created_at",
     "was_normalized",
