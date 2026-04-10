@@ -48,14 +48,28 @@ def classify_activity(value):
 
 
 def extract_origin_phone(subject):
-    if pd.isna(subject):
-        return None
+    def normalize_text(value):
+    if pd.isna(value):
+        return ""
+    return str(value).strip().lower()
 
-    text = str(subject)
-    match = re.search(r"\bde\s+(\+\d{7,20})\b", text)
-    if match:
-        return match.group(1)
-    return None
+
+def is_outbound_call_subject(subject):
+    """
+    Detecta si el asunto corresponde a una llamada saliente.
+    Ejemplos típicos:
+    - 'Llamada saliente (...) de +34... a +34...'
+    - 'LLamada saliente (...) de +34...'
+    """
+    text = normalize_text(subject)
+
+    outbound_patterns = [
+        "llamada saliente",
+        "llamada saliente (",
+        "llamada saliente de ",
+    ]
+
+    return any(pat in text for pat in outbound_patterns)
 
 
 def pct(series):
