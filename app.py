@@ -735,10 +735,10 @@ if page == "Resumen / resultados":
 
     st.pyplot(fig2)
     else:
-    st.info("No hay datos de carrusel para los filtros seleccionados.")
+        st.info("No hay datos de carrusel para los filtros seleccionados.")
 
-    st.subheader("Tabla resumen por agente")
-    final_summary = flow_agent_summary.merge(
+        st.subheader("Tabla resumen por agente")
+        final_summary = flow_agent_summary.merge(
         carrousel_agent_summary,
         on="agent",
         how="left"
