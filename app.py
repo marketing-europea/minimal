@@ -692,25 +692,50 @@ if page == "Resumen / resultados":
     else:
         st.info("No hay datos de flujo para los filtros seleccionados.")
 
-    if selected_carrousel_status_resumen == "% de leads que usan el carrusel":
-        title_graph_2 = "Grafico 2 · Agente por agente · % de leads que usan el carrusel"
-    else:
-        title_graph_2 = (
-            f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: "
-            f"{selected_carrousel_status_resumen}"
+if selected_carrousel_status_resumen == "% de leads que usan el carrusel":
+    title_graph_2 = "Grafico 2 · Agente por agente · % de leads que usan el carrusel"
+else:
+    title_graph_2 = (
+        f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: "
+        f"{selected_carrousel_status_resumen}"
+    )
+
+st.subheader(title_graph_2)
+
+if not carrousel_agent_summary.empty:
+    chart_carrousel = (
+        carrousel_agent_summary[["agent", selected_metric_col]]
+        .sort_values(selected_metric_col, ascending=False)
+        .reset_index(drop=True)
+    )
+
+    fig2, ax2 = plt.subplots(figsize=(14, 6))
+
+    bars2 = ax2.bar(
+        chart_carrousel["agent"],
+        chart_carrousel[selected_metric_col]
+    )
+
+    ax2.set_ylabel("%")
+    ax2.set_xlabel("Agente")
+    ax2.set_title(title_graph_2)
+    ax2.set_ylim(0, max(chart_carrousel[selected_metric_col].max() + 10, 10))
+    plt.xticks(rotation=90)
+
+    for bar, value in zip(bars2, chart_carrousel[selected_metric_col]):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{value:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            fontweight="bold"
         )
 
-    st.subheader(title_graph_2)
-
-    if not carrousel_agent_summary.empty:
-        chart_carrousel = (
-            carrousel_agent_summary[["agent", selected_metric_col]]
-            .sort_values(selected_metric_col, ascending=False)
-            .set_index("agent")
-        )
-        st.bar_chart(chart_carrousel)
-    else:
-        st.info("No hay datos de carrusel para los filtros seleccionados.")
+    st.pyplot(fig2)
+else:
+    st.info("No hay datos de carrusel para los filtros seleccionados.")
 
     st.subheader("Tabla resumen por agente")
     final_summary = flow_agent_summary.merge(
