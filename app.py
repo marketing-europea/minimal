@@ -1,6 +1,7 @@
 import re
 from datetime import time, timedelta
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -54,9 +55,6 @@ def normalize_text(value):
 
 
 def is_outbound_call_subject(subject):
-    """
-    Detecta si el asunto corresponde a una llamada saliente.
-    """
     text = normalize_text(subject)
     outbound_patterns = [
         "llamada saliente",
@@ -67,12 +65,6 @@ def is_outbound_call_subject(subject):
 
 
 def extract_origin_phone(subject):
-    """
-    Extrae el telefono origen completo desde 'Actividad - Asunto'.
-    Ejemplo:
-    'Llamada saliente (00:00:12) de +34604574139 (Ventas) a +34696481998 (Benito)'
-    -> '+34604574139'
-    """
     if pd.isna(subject):
         return None
 
@@ -273,7 +265,6 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     result["phones_sequence"] = " | ".join(phones)
     result["has_outbound_call_with_phone"] = True
 
-    # Evaluacion real del carrusel basada en ORDEN
     first_three = phones[:3]
     unique_first_three = len(set(first_three))
 
@@ -385,12 +376,10 @@ def load_data(uploaded_file):
     )
     df["was_normalized"] = df["normalized_created_at"] != df["lead_created_at"]
 
-    # FILTROS Y REPORTING SIEMPRE POR FECHA DE ACTIVIDAD
     df["activity_year"] = df["activity_completed_at"].dt.year
     df["activity_month"] = df["activity_completed_at"].dt.month
     df["activity_month_name"] = df["activity_month"].map(MONTHS_ES)
 
-    # Solo informativo
     df["lead_created_year"] = df["lead_created_at"].dt.year
     df["lead_created_month"] = df["lead_created_at"].dt.month
     df["lead_created_month_name"] = df["lead_created_month"].map(MONTHS_ES)
@@ -659,39 +648,39 @@ if page == "Resumen / resultados":
         if not carrousel_agent_summary.empty else "0.0%"
     )
 
-st.subheader("Grafico 1 · Agente por agente · Quien usa el flujo")
+    st.subheader("Grafico 1 · Agente por agente · Quien usa el flujo")
 
-chart_flow_use = (
-    flow_agent_summary[["agent", "uso_flujo_pct"]]
-    .sort_values("uso_flujo_pct", ascending=False)
-    .reset_index(drop=True)
-)
-
-fig, ax = plt.subplots(figsize=(14, 6))
-
-bars = ax.bar(
-    chart_flow_use["agent"],
-    chart_flow_use["uso_flujo_pct"]
-)
-
-ax.set_ylabel("%")
-ax.set_xlabel("Agente")
-ax.set_title("Uso del flujo por agente")
-ax.set_ylim(0, max(chart_flow_use["uso_flujo_pct"].max() + 10, 10))
-plt.xticks(rotation=90)
-
-for bar, value in zip(bars, chart_flow_use["uso_flujo_pct"]):
-    ax.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 1,
-        f"{value:.1f}%",
-        ha="center",
-        va="bottom",
-        fontsize=11,
-        fontweight="bold"
+    chart_flow_use = (
+        flow_agent_summary[["agent", "uso_flujo_pct"]]
+        .sort_values("uso_flujo_pct", ascending=False)
+        .reset_index(drop=True)
     )
 
-st.pyplot(fig)
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    bars = ax.bar(
+        chart_flow_use["agent"],
+        chart_flow_use["uso_flujo_pct"]
+    )
+
+    ax.set_ylabel("%")
+    ax.set_xlabel("Agente")
+    ax.set_title("Uso del flujo por agente")
+    ax.set_ylim(0, max(chart_flow_use["uso_flujo_pct"].max() + 10, 10))
+    plt.xticks(rotation=90)
+
+    for bar, value in zip(bars, chart_flow_use["uso_flujo_pct"]):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{value:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            fontweight="bold"
+        )
+
+    st.pyplot(fig)
 
     st.subheader(
         f"Grafico 2 · Agente por agente · % de leads con carrusel en estado: {selected_carrousel_status_resumen}"
