@@ -47,8 +47,7 @@ def classify_activity(value):
     return "other"
 
 
-def extract_origin_phone(subject):
-    def normalize_text(value):
+def normalize_text(value):
     if pd.isna(value):
         return ""
     return str(value).strip().lower()
@@ -57,19 +56,34 @@ def extract_origin_phone(subject):
 def is_outbound_call_subject(subject):
     """
     Detecta si el asunto corresponde a una llamada saliente.
-    Ejemplos típicos:
+    Ejemplos:
     - 'Llamada saliente (...) de +34... a +34...'
     - 'LLamada saliente (...) de +34...'
     """
     text = normalize_text(subject)
-
     outbound_patterns = [
         "llamada saliente",
         "llamada saliente (",
         "llamada saliente de ",
     ]
-
     return any(pat in text for pat in outbound_patterns)
+
+
+def extract_origin_phone(subject):
+    """
+    Extrae el telefono origen completo desde 'Actividad - Asunto'.
+    Ejemplo:
+    'Llamada saliente (00:00:12) de +34604574139 (Ventas) a +34696481998 (Benito)'
+    -> '+34604574139'
+    """
+    if pd.isna(subject):
+        return None
+
+    text = str(subject)
+    match = re.search(r"\bde\s+(\+\d{7,20})\b", text)
+    if match:
+        return match.group(1)
+    return None
 
 
 def pct(series):
@@ -225,7 +239,12 @@ def extract_lead_milestones(group: pd.DataFrame) -> dict:
 
 def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     group = group.sort_values("activity_completed_at").copy()
-    calls = group[group["activity_group"] == "call"].copy()
+
+    calls = group[
+        (group["activity_group"] == "call") &
+        (group["is_outbound_call"] == True)
+    ].copy()
+
     calls = calls[calls["origin_phone"].notna()].copy()
 
     result = {
@@ -238,6 +257,7 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
     }
@@ -252,6 +272,7 @@ def analyze_phone_carrousel(group: pd.DataFrame) -> dict:
     result["num_calls_with_phone"] = num_calls
     result["unique_origin_phones"] = unique_phones
     result["phones_sequence"] = " | ".join(phones)
+    result["has_outbound_call_with_phone"] = True
 
     expected_unique = min(num_calls, 3)
     result["expected_unique_phones"] = expected_unique
@@ -341,6 +362,7 @@ def load_data(uploaded_file):
     df["activity_completed_at"] = pd.to_datetime(df["activity_completed_at"], errors="coerce")
     df["activity_group"] = df["activity_type"].apply(classify_activity)
     df["origin_phone"] = df["activity_subject"].apply(extract_origin_phone)
+    df["is_outbound_call"] = df["activity_subject"].apply(is_outbound_call_subject)
 
     df = df.dropna(subset=["lead_id", "lead_created_at", "activity_completed_at", "agent"])
     df = df[df["activity_group"].isin(["call", "whatsapp"])].copy()
@@ -426,6 +448,7 @@ def build_carrousel_analysis(df: pd.DataFrame) -> pd.DataFrame:
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
     }
@@ -539,6 +562,11 @@ if page == "Resumen / resultados":
             ["Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
             key="selected_carrousel_status_resumen",
         )
+        only_evaluable_resumen = st.checkbox(
+            "Solo leads evaluables en carrusel",
+            value=True,
+            key="only_evaluable_resumen"
+        )
 
     if milestones.empty:
         st.warning("No hay datos para los filtros seleccionados.")
@@ -575,9 +603,15 @@ if page == "Resumen / resultados":
         .reset_index()
     )
 
-    if not carrousel_df.empty:
+    carrousel_df_resumen = carrousel_df.copy()
+    if only_evaluable_resumen:
+        carrousel_df_resumen = carrousel_df_resumen[
+            carrousel_df_resumen["has_outbound_call_with_phone"] == True
+        ].copy()
+
+    if not carrousel_df_resumen.empty:
         carrousel_agent_summary = (
-            carrousel_df.groupby("agent")
+            carrousel_df_resumen.groupby("agent")
             .agg(
                 leads_carrousel=("lead_id", "nunique"),
                 uso_ideal_carrusel=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
@@ -587,6 +621,10 @@ if page == "Resumen / resultados":
             )
             .reset_index()
         )
+        carrousel_agent_summary["cumplimiento_carrusel"] = (
+            carrousel_agent_summary["uso_ideal_carrusel"] +
+            carrousel_agent_summary["uso_parcial_carrusel"]
+        ).round(1)
     else:
         carrousel_agent_summary = pd.DataFrame(columns=[
             "agent",
@@ -595,6 +633,7 @@ if page == "Resumen / resultados":
             "uso_parcial_carrusel",
             "incorrecto_carrusel",
             "sin_llamadas_carrusel",
+            "cumplimiento_carrusel",
         ])
 
     metric_col_map = {
@@ -662,6 +701,7 @@ if page == "Uso de carrusel telefonico":
         "num_calls_with_phone": 0,
         "unique_origin_phones": 0,
         "expected_unique_phones": 0,
+        "has_outbound_call_with_phone": False,
         "carrousel_status": "Sin llamadas",
         "phones_sequence": "",
     }.items():
@@ -682,11 +722,19 @@ if page == "Uso de carrusel telefonico":
             ["Todos", "Uso ideal", "Uso parcial", "Incorrecto", "Sin llamadas"],
             key="selected_carrousel_status"
         )
+        only_evaluable = st.checkbox(
+            "Solo leads con llamadas salientes evaluables",
+            value=True,
+            key="only_evaluable_carrousel"
+        )
 
     view = carrousel_df.copy()
 
     if selected_agent_carrousel != "Todos":
         view = view[view["agent"] == selected_agent_carrousel].copy()
+
+    if only_evaluable:
+        view = view[view["has_outbound_call_with_phone"] == True].copy()
 
     if selected_carrousel_status != "Todos":
         view = view[view["carrousel_status"] == selected_carrousel_status].copy()
@@ -696,11 +744,11 @@ if page == "Uso de carrusel telefonico":
         st.stop()
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Leads analizados", len(view))
+    c1.metric("Leads evaluados", len(view))
     c2.metric("Uso ideal", f"{round((view['carrousel_status'] == 'Uso ideal').mean() * 100, 1):.1f}%")
     c3.metric("Uso parcial", f"{round((view['carrousel_status'] == 'Uso parcial').mean() * 100, 1):.1f}%")
     c4.metric("Incorrecto", f"{round((view['carrousel_status'] == 'Incorrecto').mean() * 100, 1):.1f}%")
-    c5.metric("Sin llamadas", f"{round((view['carrousel_status'] == 'Sin llamadas').mean() * 100, 1):.1f}%")
+    c5.metric("Cumplimiento", f"{round(((view['carrousel_status'] == 'Uso ideal') | (view['carrousel_status'] == 'Uso parcial')).mean() * 100, 1):.1f}%")
 
     st.subheader("Resumen por agente")
     summary_carrousel = (
@@ -713,11 +761,14 @@ if page == "Uso de carrusel telefonico":
             uso_ideal=("carrousel_status", lambda s: round((s == "Uso ideal").mean() * 100, 1)),
             uso_parcial=("carrousel_status", lambda s: round((s == "Uso parcial").mean() * 100, 1)),
             incorrecto=("carrousel_status", lambda s: round((s == "Incorrecto").mean() * 100, 1)),
-            sin_llamadas=("carrousel_status", lambda s: round((s == "Sin llamadas").mean() * 100, 1)),
         )
         .reset_index()
-        .sort_values("incorrecto", ascending=False)
     )
+    summary_carrousel["cumplimiento"] = (
+        summary_carrousel["uso_ideal"] + summary_carrousel["uso_parcial"]
+    ).round(1)
+
+    summary_carrousel = summary_carrousel.sort_values("cumplimiento", ascending=False)
     st.dataframe(summary_carrousel, use_container_width=True, hide_index=True)
 
     st.subheader("Distribucion de estados")
@@ -739,6 +790,7 @@ if page == "Uso de carrusel telefonico":
         "num_calls_with_phone",
         "unique_origin_phones",
         "expected_unique_phones",
+        "has_outbound_call_with_phone",
         "carrousel_status",
         "phones_sequence",
     ]
