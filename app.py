@@ -37,14 +37,25 @@ MONTHS_ES = {
 }
 
 
-def classify_activity(value):
-    if pd.isna(value):
-        return "other"
-    value = str(value).strip()
-    if value in CALL_TYPES:
+def classify_activity(activity_type, activity_subject):
+    type_text = "" if pd.isna(activity_type) else str(activity_type).strip().lower()
+    subject_text = "" if pd.isna(activity_subject) else str(activity_subject).strip().lower()
+
+    # Detectar llamadas por tipo o por asunto
+    if (
+        type_text in {x.lower() for x in CALL_TYPES}
+        or "llamada saliente" in subject_text
+        or "llamada entrante" in subject_text
+    ):
         return "call"
-    if value in WHATSAPP_TYPES:
+
+    # Detectar whatsapp por tipo o por asunto
+    if (
+        type_text in {x.lower() for x in WHATSAPP_TYPES}
+        or "whatsapp" in subject_text
+    ):
         return "whatsapp"
+
     return "other"
 
 
@@ -360,7 +371,10 @@ def load_data(uploaded_file):
     df["agent"] = df["agent"].astype(str).str.strip()
     df["lead_created_at"] = pd.to_datetime(df["lead_created_at"], errors="coerce")
     df["activity_completed_at"] = pd.to_datetime(df["activity_completed_at"], errors="coerce")
-    df["activity_group"] = df["activity_type"].apply(classify_activity)
+    df["activity_group"] = df.apply(
+    lambda row: classify_activity(row["activity_type"], row["activity_subject"]),
+    axis=1
+)
     df["origin_phone"] = df["activity_subject"].apply(extract_origin_phone)
     df["is_outbound_call"] = df["activity_subject"].apply(is_outbound_call_subject)
 
